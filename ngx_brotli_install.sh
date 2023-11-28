@@ -50,6 +50,9 @@ if [ $? -eq 0 ]; then
 
     # Display NGINX status
     sudo systemctl status nginx
+    
+    # Add ufw rule
+    sudo ufw allow 'Nginx Full'
 else
     echo "Failed to build NGINX with the Brotli module. Check the build logs for errors."
 fi
