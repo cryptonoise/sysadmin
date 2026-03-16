@@ -254,9 +254,9 @@ log_detail "Создание конфигурации: $NGINX_CONF"
 
 if [[ "$HAS_CERT" == "true" ]]; then
     # === КОНФИГ С HTTPS + БЕЗОПАСНОСТЬ ===
-    cat > "$NGINX_CONF" << 'NGINX_EOF'
-# === Cloudflare Real IP ===
-CLOUDFLARE_IPS_PLACEHOLDER
+    # Cloudflare IPs вставляем напрямую, домен и путь заменяем через sed с разделителем |
+    cat > "$NGINX_CONF" << EOF
+$CLOUDFLARE_IPS
 
 # === Глобальные настройки безопасности ===
 server_tokens off;  # Скрыть версию nginx
@@ -265,22 +265,22 @@ server_tokens off;  # Скрыть версию nginx
 server {
     listen 80;
     listen [::]:80;
-    server_name MEDIA_DOMAIN_PLACEHOLDER www.MEDIA_DOMAIN_PLACEHOLDER;
-    return 301 https://$host$request_uri;
+    server_name $MEDIA_DOMAIN www.$MEDIA_DOMAIN;
+    return 301 https://\$host\$request_uri;
 }
 
 # === HTTPS server (SECURE) ===
 server {
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
-    server_name MEDIA_DOMAIN_PLACEHOLDER www.MEDIA_DOMAIN_PLACEHOLDER;
+    server_name $MEDIA_DOMAIN www.$MEDIA_DOMAIN;
 
-    root UPLOAD_DIR_PLACEHOLDER;
+    root $UPLOAD_DIR;
     index index.html;
 
     # === SSL настройки ===
-    ssl_certificate /etc/letsencrypt/live/MEDIA_DOMAIN_PLACEHOLDER/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/MEDIA_DOMAIN_PLACEHOLDER/privkey.pem;
+    ssl_certificate /etc/letsencrypt/live/$MEDIA_DOMAIN/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$MEDIA_DOMAIN/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
     ssl_prefer_server_ciphers off;
@@ -297,7 +297,7 @@ server {
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
     add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
-    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'; media-src 'self'; object-src 'none'; frame-ancestors 'self';" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' https:; font-src 'self' data:; connect-src 'self'; media-src 'self'; object-src 'none'; frame-ancestors 'self';" always;
 
     # === CORS для OpenAI ===
     add_header Access-Control-Allow-Origin *;
@@ -305,26 +305,26 @@ server {
     add_header Access-Control-Allow-Headers 'Content-Type';
 
     # === Блокировка плохих ботов и сканеров ===
-    if ($http_user_agent ~* (bot|spider|crawler|scraper|curl|wget|python|perl|ruby|java|php|httpclient|httrack|harvest|extract|grab|miner|nmap|masscan|nikto|sqlmap|nuclei|burp|zap|acunetix|nessus|openvas|w3af|skipfish|arachni|gobuster|dirb|wfuzz|hydra|medusa|metasploit)) {
+    if (\$http_user_agent ~* (bot|spider|crawler|scraper|curl|wget|python|perl|ruby|java|php|httpclient|httrack|harvest|extract|grab|miner|nmap|masscan|nikto|sqlmap|nuclei|burp|zap|acunetix|nessus|openvas|w3af|skipfish|arachni|gobuster|dirb|wfuzz|hydra|medusa|metasploit)) {
         return 403;
     }
 
     # === Блокировка пустых User-Agent ===
-    if ($http_user_agent = "") {
+    if (\$http_user_agent = "") {
         return 403;
     }
 
     # === Rate limiting (базовый) ===
-    limit_req_zone $binary_remote_addr zone=one:10m rate=10r/s;
+    limit_req_zone \$binary_remote_addr zone=one:10m rate=10r/s;
     limit_req zone=one burst=20 nodelay;
 
     # === Логирование с реальным IP через Cloudflare ===
-    access_log /var/log/nginx/MEDIA_DOMAIN_PLACEHOLDER_access.log combined;
-    error_log /var/log/nginx/MEDIA_DOMAIN_PLACEHOLDER_error.log warn;
+    access_log /var/log/nginx/${MEDIA_DOMAIN}_access.log combined;
+    error_log /var/log/nginx/${MEDIA_DOMAIN}_error.log warn;
 
     # === Основной location ===
     location / {
-        try_files $uri $uri/ =404;
+        try_files \$uri \$uri/ =404;
         autoindex off;  # Отключить листинг директорий
         
         # === Правильные MIME-типы ===
@@ -373,36 +373,30 @@ server {
         return 404;
     }
 }
-NGINX_EOF
-
-    # Заменяем плейсхолдеры
-    sed -i "s/CLOUDFLARE_IPS_PLACEHOLDER/$CLOUDFLARE_IPS/g" "$NGINX_CONF"
-    sed -i "s/MEDIA_DOMAIN_PLACEHOLDER/$MEDIA_DOMAIN/g" "$NGINX_CONF"
-    sed -i "s|UPLOAD_DIR_PLACEHOLDER|$UPLOAD_DIR|g" "$NGINX_CONF"
-    
+EOF
     log_success "Конфиг создан с HTTPS + безопасность"
 else
     # === КОНФИГ ТОЛЬКО HTTP (базовая защита) ===
-    cat > "$NGINX_CONF" << 'NGINX_EOF'
-CLOUDFLARE_IPS_PLACEHOLDER
+    cat > "$NGINX_CONF" << EOF
+$CLOUDFLARE_IPS
 
 server_tokens off;
 
 server {
     listen 80;
     listen [::]:80;
-    server_name MEDIA_DOMAIN_PLACEHOLDER www.MEDIA_DOMAIN_PLACEHOLDER;
-    root UPLOAD_DIR_PLACEHOLDER;
+    server_name $MEDIA_DOMAIN www.$MEDIA_DOMAIN;
+    root $UPLOAD_DIR;
     index index.html;
     
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-Frame-Options "SAMEORIGIN" always;
     
-    if ($http_user_agent ~* (bot|spider|crawler|scraper|curl|wget|python|nikto|sqlmap|nmap|masscan)) { return 403; }
-    if ($http_user_agent = "") { return 403; }
+    if (\$http_user_agent ~* (bot|spider|crawler|scraper|curl|wget|python|nikto|sqlmap|nmap|masscan)) { return 403; }
+    if (\$http_user_agent = "") { return 403; }
     
     location / {
-        try_files $uri $uri/ =404;
+        try_files \$uri \$uri/ =404;
         autoindex off;
         types {
             image/jpeg jpg jpeg; image/png png; image/webp webp;
@@ -414,13 +408,10 @@ server {
     location ~ /\. { deny all; return 404; }
     location ~* \.(git|svn|htaccess|env|log|sql|bak)$ { deny all; return 404; }
     
-    access_log /var/log/nginx/MEDIA_DOMAIN_PLACEHOLDER_access.log;
-    error_log /var/log/nginx/MEDIA_DOMAIN_PLACEHOLDER_error.log;
+    access_log /var/log/nginx/${MEDIA_DOMAIN}_access.log;
+    error_log /var/log/nginx/${MEDIA_DOMAIN}_error.log;
 }
-NGINX_EOF
-    sed -i "s/CLOUDFLARE_IPS_PLACEHOLDER/$CLOUDFLARE_IPS/g" "$NGINX_CONF"
-    sed -i "s/MEDIA_DOMAIN_PLACEHOLDER/$MEDIA_DOMAIN/g" "$NGINX_CONF"
-    sed -i "s|UPLOAD_DIR_PLACEHOLDER|$UPLOAD_DIR|g" "$NGINX_CONF"
+EOF
     log_success "Конфиг создан (HTTP + базовая защита)"
 fi
 
