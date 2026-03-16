@@ -231,7 +231,7 @@ log_success "SSH-ключ принят"
 
 # === ШАГ 4: Ввод SSH порта ===
 log_step "Шаг 4: Настройка SSH-порта"
-read -p "🔌 Введите порт для SSH-подключения [6934]: " SSH_PORT < /dev/tty
+read -p "🔌 Введите порт для SSH-подключения [по-умолачнию 6934]: " SSH_PORT < /dev/tty
 SSH_PORT=${SSH_PORT:-6934}
 
 # Валидация порта
@@ -519,13 +519,7 @@ else
 fi
 
 # 🗑️ Информация об откате
-echo -e "${YELLOW}🔄 Откат изменений:${NC}"
-echo ""
-echo "   Для удаления всех настроек выполните:"
-echo ""
-echo -e "   ${RED}curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/server4keymaster.sh | bash${NC}"
-echo ""
-echo "   И выберите опцию 2 (ОТКАТИТЬ все изменения)"
+echo -e "${YELLOW}🔄 Для отката выполенных команд - перезапустите скрипт:${NC}"
 echo ""
 
 log_success "Готово! Сервер ожидает подключения от скрипта KeyMaster 🚀"
