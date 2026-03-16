@@ -282,7 +282,6 @@ server {
     ssl_certificate /etc/letsencrypt/live/$MEDIA_DOMAIN/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/$MEDIA_DOMAIN/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
     ssl_prefer_server_ciphers off;
     ssl_session_cache shared:SSL:10m;
     ssl_session_timeout 1d;
@@ -318,29 +317,8 @@ server {
 
     # === Основной location ===
     location / {
-        try_files \$uri \$uri/ =404;
-        autoindex off;  # Отключить листинг директорий
-        
-        # === Правильные MIME-типы ===
-        types {
-            image/jpeg jpg jpeg;
-            image/png png;
-            image/webp webp;
-            image/gif gif;
-            image/svg+xml svg svgz;
-            image/x-icon ico;
-            video/mp4 mp4;
-            video/quicktime mov;
-            video/x-msvideo avi;
-            video/x-matroska mkv;
-            video/x-ms-wmv wmv;
-            application/json json;
-            text/plain txt;
-        }
-        default_type application/octet-stream;
-        
-        # === Дополнительные заголовки для файлов ===
-        add_header X-Content-Type-Options "nosniff" always;
+        try_files $uri $uri/ =404;
+        autoindex off;
     }
 
     # === Блокировка доступа к скрытым файлам ===
@@ -353,14 +331,6 @@ server {
 
     # === Блокировка доступа к системным файлам ===
     location ~* \.(git|svn|htaccess|htpasswd|env|log|sql|bak|backup|tmp|temp|swp|swo|swn)$ {
-        deny all;
-        access_log off;
-        log_not_found off;
-        return 404;
-    }
-
-    # === Блокировка PHP/исполняемых файлов (если не нужны) ===
-    location ~* \.(php|phtml|php3|php4|php5|php7|php8|pl|py|cgi|sh|bash|exe|bin|out|so)$ {
         deny all;
         access_log off;
         log_not_found off;
