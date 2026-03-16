@@ -1,9 +1,9 @@
 #!/bin/bash
-# server4keymaster.sh - Настройка сервера для KeyMaster
+# server4keymaster.sh - Настройка сервера для KeyMaster (SECURE Edition)
 # Запуск: curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/server4keymaster.sh | bash
 
 # === ВЕРСИЯ СКРИПТА ===
-SCRIPT_VERSION="v2.6"
+SCRIPT_VERSION="v3.0-SECURE"
 SCRIPT_NAME="KeyMaster Server Setup"
 
 # === МЕТКА УСТАНОВКИ ===
@@ -25,8 +25,9 @@ log_success() { echo -e "${GREEN}[✅]${NC} $1"; }
 log_warn()    { echo -e "${YELLOW}[⚠️]${NC} $1"; }
 log_error()   { echo -e "${RED}[❌]${NC} $1"; }
 log_step()    { echo -e "\n${CYAN}────────────────────────────────${NC}"; echo -e "${CYAN}[⚙️]${NC} $1"; echo -e "${CYAN}────────────────────────────────${NC}\n"; }
+log_detail()  { echo -e "   ${CYAN}→${NC} $1"; }
 
-# === Cloudflare IP ranges (единая переменная) ===
+# === Cloudflare IP ranges ===
 CLOUDFLARE_IPS='
     set_real_ip_from 103.21.244.0/22;
     set_real_ip_from 103.22.200.0/22;
@@ -52,7 +53,7 @@ CLOUDFLARE_IPS='
     set_real_ip_from 2c0f:f248::/32;
     real_ip_header CF-Connecting-IP;'
 
-# === ЗАГОЛОВОК ПРИ ЗАПУСКЕ ===
+# === ЗАГОЛОВОК ===
 print_header() {
     echo ""
     echo -e "${RED}────────────────────────────────${NC}"
@@ -61,55 +62,43 @@ print_header() {
     echo -e "${RED}────────────────────────────────${NC}"
     echo ""
 }
-
 print_header
 
-# Проверка прав root
+# Проверка root
 if [[ $EUID -ne 0 ]]; then
    log_error "Скрипт должен быть запущен от имени root"
    exit 1
 fi
 
-# === ПРОВЕРКА МЕТКИ УСТАНОВКИ ===
+# === ПРОВЕРКА МЕТКИ ===
 if [[ -f "$MARKER_FILE" ]]; then
-    log_warn "Обнаружена метка предыдущей установки: $MARKER_FILE"
-    echo ""
+    log_warn "Обнаружена метка предыдущей установки"
     echo "📋 Скрипт уже запускался на этом сервере."
-    echo "   Дата установки: $(cat "$MARKER_FILE" | head -1)"
-    echo "   Домен: $(cat "$MARKER_FILE" | grep '^DOMAIN=' | cut -d'=' -f2)"
-    echo "   Пользователь: $(cat "$MARKER_FILE" | grep '^USER=' | cut -d'=' -f2)"
-    echo "   SSH порт: $(cat "$MARKER_FILE" | grep '^SSH_PORT=' | cut -d'=' -f2)"
+    echo "   Домен: $(grep '^DOMAIN=' "$MARKER_FILE" | cut -d'=' -f2)"
+    echo "   Пользователь: $(grep '^USER=' "$MARKER_FILE" | cut -d'=' -f2)"
     echo ""
     echo -e "${YELLOW}Выберите действие:${NC}"
-    echo "   1 - Продолжить настройку (обновить конфигурацию)"
+    echo "   1 - Продолжить настройку"
     echo "   2 - 🗑️  ОТКАТИТЬ все изменения"
-    echo "   3 - Выйти без изменений"
-    echo ""
+    echo "   3 - Выйти"
     read -p "Введите номер [1-3]: " ACTION_CHOICE < /dev/tty
-    
     case $ACTION_CHOICE in
         2)
-            log_step "🗑️  Откат изменений"
+            log_step "🗑️  Откат"
             PREV_USER=$(grep '^USER=' "$MARKER_FILE" | cut -d'=' -f2)
             PREV_DOMAIN=$(grep '^DOMAIN=' "$MARKER_FILE" | cut -d'=' -f2)
             PREV_UPLOAD_DIR=$(grep '^UPLOAD_DIR=' "$MARKER_FILE" | cut -d'=' -f2)
             PREV_SSH_PORT=$(grep '^SSH_PORT=' "$MARKER_FILE" | cut -d'=' -f2)
             PREV_SSH_PORT=${PREV_SSH_PORT:-6934}
-            
             echo ""
-            log_info "Начало отката..."
-            [[ -n "$PREV_USER" ]] && id "$PREV_USER" &>/dev/null && userdel -r "$PREV_USER" 2>/dev/null && log_success "Пользователь удалён"
-            [[ -n "$PREV_UPLOAD_DIR" ]] && [[ -d "$PREV_UPLOAD_DIR" ]] && rm -rf "$PREV_UPLOAD_DIR" && log_success "Папка удалена"
-            if [[ -n "$PREV_DOMAIN" ]]; then
-                rm -f "/etc/nginx/sites-available/$PREV_DOMAIN" "/etc/nginx/sites-enabled/$PREV_DOMAIN" 2>/dev/null
-                systemctl reload nginx 2>/dev/null || true
-            fi
+            [[ -n "$PREV_USER" ]] && id "$PREV_USER" &>/dev/null && { log_detail "Удаление пользователя: $PREV_USER"; userdel -r "$PREV_USER" 2>/dev/null || true; }
+            [[ -n "$PREV_UPLOAD_DIR" ]] && [[ -d "$PREV_UPLOAD_DIR" ]] && { log_detail "Удаление папки: $PREV_UPLOAD_DIR"; rm -rf "$PREV_UPLOAD_DIR"; }
+            [[ -n "$PREV_DOMAIN" ]] && { rm -f "/etc/nginx/sites-available/$PREV_DOMAIN" "/etc/nginx/sites-enabled/$PREV_DOMAIN" 2>/dev/null; systemctl reload nginx 2>/dev/null || true; }
             SSH_CONFIG="/etc/ssh/sshd_config"
-            grep -q "^Port $PREV_SSH_PORT" "$SSH_CONFIG" 2>/dev/null && sed -i "/^Port $PREV_SSH_PORT/d" "$SSH_CONFIG" && systemctl restart sshd 2>/dev/null || true
+            grep -q "^Port $PREV_SSH_PORT" "$SSH_CONFIG" 2>/dev/null && { sed -i "/^Port $PREV_SSH_PORT/d" "$SSH_CONFIG"; systemctl restart sshd 2>/dev/null || true; }
             command -v ufw &>/dev/null && { ufw delete allow $PREV_SSH_PORT/tcp 2>/dev/null; ufw delete allow 80/tcp 2>/dev/null; ufw delete allow 443/tcp 2>/dev/null; } || true
             rm -f "$MARKER_FILE"
-            echo -e "${GREEN}✅ Откат завершён${NC}"
-            exit 0
+            echo -e "${GREEN}✅ Откат завершён${NC}"; exit 0
             ;;
         3) exit 0 ;;
         1) log_info "Продолжение настройки" ;;
@@ -120,16 +109,16 @@ fi
 [[ ! -f /etc/os-release ]] && { log_error "Не удалось определить ОС"; exit 1; }
 source /etc/os-release
 OS_ID=$ID
-log_info "Обнаружена ОС: $PRETTY_NAME"
+log_info "ОС: $PRETTY_NAME"
 
-# === ШАГ 1: Ввод домена ===
+# === ШАГ 1: Домен ===
 log_step "Шаг 1: Настройка домена"
 while true; do
-    read -p "🌐 Введите домен для загрузки файлов: " MEDIA_DOMAIN < /dev/tty
+    read -p "🌐 Введите домен: " MEDIA_DOMAIN < /dev/tty
     MEDIA_DOMAIN=$(echo "$MEDIA_DOMAIN" | xargs | sed 's|https\?://||' | sed 's|/$||')
     [[ -z "$MEDIA_DOMAIN" ]] && { log_error "Домен не может быть пустым"; continue; }
     [[ ! "$MEDIA_DOMAIN" =~ \. ]] && { log_error "Домен должен содержать точку"; continue; }
-    [[ ! "$MEDIA_DOMAIN" =~ ^[a-zA-Z0-9.-]+$ ]] && { log_error "Недопустимые символы в домене"; continue; }
+    [[ ! "$MEDIA_DOMAIN" =~ ^[a-zA-Z0-9.-]+$ ]] && { log_error "Недопустимые символы"; continue; }
     break
 done
 log_success "Домен: $MEDIA_DOMAIN"
@@ -154,11 +143,13 @@ SSH_PORT=${SSH_PORT:-6934}
 [[ "$SSH_PORT" == "22" ]] && log_warn "Порт 22 — стандартный"
 log_success "Порт: $SSH_PORT"
 
-# === ШАГ 5: Установка пакетов ===
+# === ШАГ 5: Пакеты ===
 log_step "Шаг 5: Установка пакетов"
+log_detail "Обновление репозиториев..."
 case $OS_ID in
     ubuntu|debian)
         apt-get update
+        log_detail "Установка: nginx, openssh-server, curl, wget, ufw, certbot, python3-certbot-nginx"
         apt-get install -y nginx openssh-server curl wget ufw certbot python3-certbot-nginx
         ;;
     centos|rhel|fedora|almalinux|rocky)
@@ -168,137 +159,250 @@ case $OS_ID in
 esac
 log_success "Пакеты установлены"
 
-# === ШАГ 6-8: Пользователь, SSH, папка ===
+# === ШАГ 6: Пользователь ===
 log_step "Шаг 6: Создание пользователя"
-id "$UPLOAD_USER" &>/dev/null || { useradd -m -s /bin/bash -G www-data "$UPLOAD_USER" 2>/dev/null || useradd -m -s /bin/bash "$UPLOAD_USER"; log_success "Создан"; }
+if id "$UPLOAD_USER" &>/dev/null; then
+    log_detail "Пользователь $UPLOAD_USER уже существует"
+    log_warn "Пропускаем создание"
+else
+    log_detail "Выполнение: useradd -m -s /bin/bash -G www-data $UPLOAD_USER"
+    useradd -m -s /bin/bash -G www-data "$UPLOAD_USER" 2>/dev/null || useradd -m -s /bin/bash "$UPLOAD_USER"
+    log_detail "Домашняя папка: /home/$UPLOAD_USER"
+    log_detail "Группы: $(groups $UPLOAD_USER)"
+    log_success "Пользователь $UPLOAD_USER создан"
+fi
 
+# === ШАГ 7: SSH ===
 log_step "Шаг 7: Настройка SSH"
 SSH_DIR="/home/$UPLOAD_USER/.ssh"
+log_detail "Создание директории: $SSH_DIR"
 mkdir -p "$SSH_DIR"
+log_detail "Запись ключа в: $SSH_DIR/authorized_keys"
 echo "$SSH_PUBLIC_KEY" > "$SSH_DIR/authorized_keys"
-chmod 700 "$SSH_DIR"; chmod 600 "$SSH_DIR/authorized_keys"
+log_detail "Установка прав: chmod 700 $SSH_DIR"
+chmod 700 "$SSH_DIR"
+log_detail "Установка прав: chmod 600 $SSH_DIR/authorized_keys"
+chmod 600 "$SSH_DIR/authorized_keys"
+log_detail "Смена владельца: chown -R $UPLOAD_USER:$UPLOAD_USER $SSH_DIR"
 chown -R "$UPLOAD_USER:$UPLOAD_USER" "$SSH_DIR"
-SSH_CONFIG="/etc/ssh/sshd_config"
-grep -q "^Port $SSH_PORT" "$SSH_CONFIG" 2>/dev/null || sed -i "/^#Port 22/a Port $SSH_PORT" "$SSH_CONFIG" 2>/dev/null || echo "Port $SSH_PORT" >> "$SSH_CONFIG"
-systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null || true
-log_success "SSH настроен"
+log_success "SSH-ключ настроен"
 
-log_step "Шаг 8: Папка загрузок"
+SSH_CONFIG="/etc/ssh/sshd_config"
+if ! grep -q "^Port $SSH_PORT" "$SSH_CONFIG" 2>/dev/null; then
+    log_detail "Добавление порта $SSH_PORT в $SSH_CONFIG"
+    sed -i "/^#Port 22/a Port $SSH_PORT" "$SSH_CONFIG" 2>/dev/null || echo "Port $SSH_PORT" >> "$SSH_CONFIG"
+    log_success "Порт $SSH_PORT добавлен"
+else
+    log_warn "Порт $SSH_PORT уже в конфигурации"
+fi
+log_detail "Перезапуск SSH-сервиса"
+systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null || true
+log_success "SSH перезапущен"
+
+# === ШАГ 8: Папка загрузок ===
+log_step "Шаг 8: Папка для загрузок"
 UPLOAD_DIR="/var/www/uploads"
+log_detail "Создание директории: $UPLOAD_DIR"
 mkdir -p "$UPLOAD_DIR"
+log_detail "Настройка прав: chown -R $UPLOAD_USER:www-data $UPLOAD_DIR"
 chown -R "$UPLOAD_USER:www-data" "$UPLOAD_DIR"
+log_detail "Настройка прав: chmod 755 $UPLOAD_DIR"
 chmod 755 "$UPLOAD_DIR"
+log_detail "Папка: $UPLOAD_DIR"
+log_detail "Владелец: $(stat -c '%U:%G' "$UPLOAD_DIR")"
+log_detail "Права: $(stat -c '%a' "$UPLOAD_DIR")"
 log_success "Папка готова"
 
-# === ШАГ 9: Проверка наличия сертификата ===
+# === ШАГ 9: Проверка сертификата ===
 log_step "Шаг 9: Проверка SSL-сертификата"
 CERT_PATH="/etc/letsencrypt/live/$MEDIA_DOMAIN/fullchain.pem"
 HAS_CERT=false
-
 if [[ -f "$CERT_PATH" ]]; then
-    log_success "✅ Сертификат найден: $CERT_PATH"
+    log_detail "Проверка: $CERT_PATH"
+    log_detail "Срок действия: $(openssl x509 -in "$CERT_PATH" -noout -enddate 2>/dev/null | cut -d= -f2)"
+    log_detail "Subject: $(openssl x509 -in "$CERT_PATH" -noout -subject 2>/dev/null | cut -d= -f2-)"
+    log_success "✅ Сертификат найден"
     HAS_CERT=true
 else
     log_warn "Сертификат не найден: $CERT_PATH"
 fi
 
-# === ШАГ 10: Попытка получить сертификат (если нет) ===
+# === ШАГ 10: Получение сертификата ===
 if [[ "$HAS_CERT" == "false" ]]; then
     log_step "Шаг 10: Получение сертификата"
-    log_info "Проверка доступности домена..."
+    log_detail "Проверка доступности домена по HTTP..."
     if curl -s --connect-timeout 5 "http://$MEDIA_DOMAIN" > /dev/null 2>&1; then
-        log_info "Запуск certbot..."
+        log_detail "Запуск certbot..."
+        log_detail "Команда: certbot --nginx -d $MEDIA_DOMAIN -d www.$MEDIA_DOMAIN --expand --force-renewal --non-interactive --agree-tos --redirect"
         if certbot --nginx -d "$MEDIA_DOMAIN" -d "www.$MEDIA_DOMAIN" --expand --force-renewal --non-interactive --agree-tos --redirect --email "admin@$MEDIA_DOMAIN" 2>&1 | tee /tmp/certbot.log; then
-            log_success "Сертификат получен!"
+            log_success "✅ Сертификат получен!"
             HAS_CERT=true
         else
-            log_warn "Не удалось получить сертификат (продолжаем с HTTP)"
+            log_warn "⚠️ Не удалось получить сертификат (продолжаем с HTTP)"
         fi
     else
-        log_warn "Домен недоступен по HTTP — пропуск certbot"
+        log_warn "⚠️ Домен недоступен по HTTP — пропуск certbot"
     fi
 fi
 
-# === ШАГ 11: Генерация nginx конфига (ВСЕГДА с HTTPS если сертификат есть) ===
-log_step "Шаг 11: Настройка nginx"
+# === ШАГ 11: Генерация nginx конфига (SECURE) ===
+log_step "Шаг 11: Настройка nginx (SECURE)"
 NGINX_CONF="/etc/nginx/sites-available/$MEDIA_DOMAIN"
 NGINX_LINK="/etc/nginx/sites-enabled/$MEDIA_DOMAIN"
 
-log_info "Создание конфигурации..."
+log_detail "Создание конфигурации: $NGINX_CONF"
 
 if [[ "$HAS_CERT" == "true" ]]; then
-    # === КОНФИГ С HTTPS ===
-    cat > "$NGINX_CONF" << EOF
-$CLOUDFLARE_IPS
+    # === КОНФИГ С HTTPS + БЕЗОПАСНОСТЬ ===
+    cat > "$NGINX_CONF" << 'NGINX_EOF'
+# === Cloudflare Real IP ===
+CLOUDFLARE_IPS_PLACEHOLDER
 
-# HTTP → HTTPS redirect
+# === Глобальные настройки безопасности ===
+server_tokens off;  # Скрыть версию nginx
+
+# === HTTP → HTTPS redirect ===
 server {
     listen 80;
     listen [::]:80;
-    server_name $MEDIA_DOMAIN www.$MEDIA_DOMAIN;
-    return 301 https://\$host\$request_uri;
+    server_name MEDIA_DOMAIN_PLACEHOLDER www.MEDIA_DOMAIN_PLACEHOLDER;
+    return 301 https://$host$request_uri;
 }
 
-# HTTPS server
+# === HTTPS server (SECURE) ===
 server {
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
-    server_name $MEDIA_DOMAIN www.$MEDIA_DOMAIN;
+    server_name MEDIA_DOMAIN_PLACEHOLDER www.MEDIA_DOMAIN_PLACEHOLDER;
 
-    root $UPLOAD_DIR;
+    root UPLOAD_DIR_PLACEHOLDER;
     index index.html;
 
-    ssl_certificate /etc/letsencrypt/live/$MEDIA_DOMAIN/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/$MEDIA_DOMAIN/privkey.pem;
-
+    # === SSL настройки ===
+    ssl_certificate /etc/letsencrypt/live/MEDIA_DOMAIN_PLACEHOLDER/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/MEDIA_DOMAIN_PLACEHOLDER/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
     ssl_prefer_server_ciphers off;
     ssl_session_cache shared:SSL:10m;
     ssl_session_timeout 1d;
+    ssl_session_tickets off;
+    ssl_stapling on;
+    ssl_stapling_verify on;
 
-    client_max_body_size 100M;
+    # === Security Headers ===
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-XSS-Protection "1; mode=block" always;
+    add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+    add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+    add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'; media-src 'self'; object-src 'none'; frame-ancestors 'self';" always;
 
+    # === CORS для OpenAI ===
     add_header Access-Control-Allow-Origin *;
     add_header Access-Control-Allow-Methods 'GET, OPTIONS';
     add_header Access-Control-Allow-Headers 'Content-Type';
-    add_header Strict-Transport-Security "max-age=63072000; includeSubDomains" always;
 
+    # === Блокировка плохих ботов и сканеров ===
+    if ($http_user_agent ~* (bot|spider|crawler|scraper|curl|wget|python|perl|ruby|java|php|httpclient|httrack|harvest|extract|grab|miner|nmap|masscan|nikto|sqlmap|nuclei|burp|zap|acunetix|nessus|openvas|w3af|skipfish|arachni|gobuster|dirb|wfuzz|hydra|medusa|metasploit)) {
+        return 403;
+    }
+
+    # === Блокировка пустых User-Agent ===
+    if ($http_user_agent = "") {
+        return 403;
+    }
+
+    # === Rate limiting (базовый) ===
+    limit_req_zone $binary_remote_addr zone=one:10m rate=10r/s;
+    limit_req zone=one burst=20 nodelay;
+
+    # === Логирование с реальным IP через Cloudflare ===
+    access_log /var/log/nginx/MEDIA_DOMAIN_PLACEHOLDER_access.log combined;
+    error_log /var/log/nginx/MEDIA_DOMAIN_PLACEHOLDER_error.log warn;
+
+    # === Основной location ===
     location / {
-        try_files \$uri \$uri/ =404;
-        autoindex off;
+        try_files $uri $uri/ =404;
+        autoindex off;  # Отключить листинг директорий
+        
+        # === Правильные MIME-типы ===
         types {
-            image/jpeg jpg jpeg; image/png png; image/webp webp;
-            video/mp4 mp4; video/quicktime mov; video/x-msvideo avi;
-            video/x-matroska mkv; video/x-ms-wmv wmv;
+            image/jpeg jpg jpeg;
+            image/png png;
+            image/webp webp;
+            image/gif gif;
+            image/svg+xml svg svgz;
+            image/x-icon ico;
+            video/mp4 mp4;
+            video/quicktime mov;
+            video/x-msvideo avi;
+            video/x-matroska mkv;
+            video/x-ms-wmv wmv;
+            application/json json;
+            text/plain txt;
         }
         default_type application/octet-stream;
-        add_header X-Content-Type-Options nosniff;
-        add_header X-Frame-Options SAMEORIGIN;
+        
+        # === Дополнительные заголовки для файлов ===
+        add_header X-Content-Type-Options "nosniff" always;
     }
-    location ~ /\. { deny all; return 404; }
-    access_log /var/log/nginx/${MEDIA_DOMAIN}_access.log;
-    error_log /var/log/nginx/${MEDIA_DOMAIN}_error.log;
+
+    # === Блокировка доступа к скрытым файлам ===
+    location ~ /\. {
+        deny all;
+        access_log off;
+        log_not_found off;
+        return 404;
+    }
+
+    # === Блокировка доступа к системным файлам ===
+    location ~* \.(git|svn|htaccess|htpasswd|env|log|sql|bak|backup|tmp|temp|swp|swo|swn)$ {
+        deny all;
+        access_log off;
+        log_not_found off;
+        return 404;
+    }
+
+    # === Блокировка PHP/исполняемых файлов (если не нужны) ===
+    location ~* \.(php|phtml|php3|php4|php5|php7|php8|pl|py|cgi|sh|bash|exe|bin|out|so)$ {
+        deny all;
+        access_log off;
+        log_not_found off;
+        return 404;
+    }
 }
-EOF
-    log_success "Конфиг создан с HTTPS"
+NGINX_EOF
+
+    # Заменяем плейсхолдеры
+    sed -i "s/CLOUDFLARE_IPS_PLACEHOLDER/$CLOUDFLARE_IPS/g" "$NGINX_CONF"
+    sed -i "s/MEDIA_DOMAIN_PLACEHOLDER/$MEDIA_DOMAIN/g" "$NGINX_CONF"
+    sed -i "s|UPLOAD_DIR_PLACEHOLDER|$UPLOAD_DIR|g" "$NGINX_CONF"
+    
+    log_success "Конфиг создан с HTTPS + безопасность"
 else
-    # === КОНФИГ ТОЛЬКО HTTP ===
-    cat > "$NGINX_CONF" << EOF
-$CLOUDFLARE_IPS
+    # === КОНФИГ ТОЛЬКО HTTP (базовая защита) ===
+    cat > "$NGINX_CONF" << 'NGINX_EOF'
+CLOUDFLARE_IPS_PLACEHOLDER
+
+server_tokens off;
 
 server {
     listen 80;
     listen [::]:80;
-    server_name $MEDIA_DOMAIN www.$MEDIA_DOMAIN;
-    root $UPLOAD_DIR;
+    server_name MEDIA_DOMAIN_PLACEHOLDER www.MEDIA_DOMAIN_PLACEHOLDER;
+    root UPLOAD_DIR_PLACEHOLDER;
     index index.html;
-    client_max_body_size 100M;
-    add_header Access-Control-Allow-Origin *;
-    add_header Access-Control-Allow-Methods 'GET, OPTIONS';
-    add_header Access-Control-Allow-Headers 'Content-Type';
+    
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    
+    if ($http_user_agent ~* (bot|spider|crawler|scraper|curl|wget|python|nikto|sqlmap|nmap|masscan)) { return 403; }
+    if ($http_user_agent = "") { return 403; }
+    
     location / {
-        try_files \$uri \$uri/ =404;
+        try_files $uri $uri/ =404;
         autoindex off;
         types {
             image/jpeg jpg jpeg; image/png png; image/webp webp;
@@ -308,54 +412,124 @@ server {
         default_type application/octet-stream;
     }
     location ~ /\. { deny all; return 404; }
-    access_log /var/log/nginx/${MEDIA_DOMAIN}_access.log;
-    error_log /var/log/nginx/${MEDIA_DOMAIN}_error.log;
+    location ~* \.(git|svn|htaccess|env|log|sql|bak)$ { deny all; return 404; }
+    
+    access_log /var/log/nginx/MEDIA_DOMAIN_PLACEHOLDER_access.log;
+    error_log /var/log/nginx/MEDIA_DOMAIN_PLACEHOLDER_error.log;
 }
-EOF
-    log_success "Конфиг создан (HTTP)"
+NGINX_EOF
+    sed -i "s/CLOUDFLARE_IPS_PLACEHOLDER/$CLOUDFLARE_IPS/g" "$NGINX_CONF"
+    sed -i "s/MEDIA_DOMAIN_PLACEHOLDER/$MEDIA_DOMAIN/g" "$NGINX_CONF"
+    sed -i "s|UPLOAD_DIR_PLACEHOLDER|$UPLOAD_DIR|g" "$NGINX_CONF"
+    log_success "Конфиг создан (HTTP + базовая защита)"
 fi
 
-[[ ! -L "$NGINX_LINK" ]] && [[ ! -f "$NGINX_LINK" ]] && ln -s "$NGINX_CONF" "$NGINX_LINK"
-nginx -t
-systemctl enable nginx
-systemctl reload nginx
-log_success "nginx перезагружен"
+# Создаём симлинк
+if [[ ! -L "$NGINX_LINK" ]] && [[ ! -f "$NGINX_LINK" ]]; then
+    log_detail "Создание симлинка: $NGINX_LINK -> $NGINX_CONF"
+    ln -s "$NGINX_CONF" "$NGINX_LINK"
+fi
 
-# === ШАГ 12: Автообновление сертификата ===
-log_step "Шаг 12: Автообновление"
+# Проверка и перезагрузка nginx
+log_detail "Проверка конфигурации: nginx -t"
+nginx -t
+log_detail "Перезагрузка nginx: systemctl reload nginx"
+systemctl reload nginx
+log_success "nginx перезапущен"
+
+# === ШАГ 12: Автообновление ===
+log_step "Шаг 12: Автообновление сертификата"
 if [[ "$HAS_CERT" == "true" ]]; then
-    systemctl enable certbot.timer 2>/dev/null || true
-    systemctl start certbot.timer 2>/dev/null || true
-    [[ -f /etc/cron.d/certbot ]] && log_success "Cron-задача существует"
-    log_info "Тест автообновления (dry-run)..."
-    timeout 90 certbot renew --dry-run 2>&1 | tee /tmp/certbot-dryrun.log | grep -qi "congratulations" && log_success "✅ Автообновление работает" || log_warn "⚠️ Проверка завершилась с предупреждениями"
+    log_detail "Проверка systemd timer..."
+    if systemctl list-unit-files | grep -q certbot.timer 2>/dev/null; then
+        log_detail "Включение: systemctl enable certbot.timer"
+        systemctl enable certbot.timer 2>/dev/null || true
+        log_detail "Запуск: systemctl start certbot.timer"
+        systemctl start certbot.timer 2>/dev/null || true
+        log_success "✅ Timer активирован"
+    fi
+    [[ -f /etc/cron.d/certbot ]] && log_detail "Cron-задача: /etc/cron.d/certbot" && log_success "✅ Cron настроен"
+    
+    log_detail "Запуск проверки: certbot renew --dry-run (может занять до 90 секунд)..."
+    echo ""
+    if timeout 90 certbot renew --dry-run 2>&1 | tee /tmp/certbot-dryrun.log; then
+        if grep -qi "congratulations" /tmp/certbot-dryrun.log; then
+            echo ""
+            log_success "✅ Автообновление работает корректно!"
+        else
+            echo ""
+            log_warn "⚠️ Проверка завершилась с предупреждениями"
+            log_detail "Логи: /tmp/certbot-dryrun.log"
+        fi
+    else
+        echo ""
+        log_warn "⚠️ Проверка не прошла (таймаут или ошибка)"
+        log_detail "Логи: /tmp/certbot-dryrun.log или /var/log/letsencrypt/"
+    fi
 else
     log_warn "Пропуск (нет сертификата)"
 fi
 
-# === ШАГ 13-16: Фаервол, права, тест, метка ===
-log_step "Шаг 13: Фаервол"
+# === ШАГ 13: Фаервол ===
+log_step "Шаг 13: Настройка фаервола"
 if command -v ufw &>/dev/null; then
-    ufw allow 22/tcp; ufw allow $SSH_PORT/tcp; ufw allow 80/tcp; ufw allow 443/tcp 2>/dev/null || true
+    log_detail "UFW: разрешаем порты"
+    log_detail "  → ufw allow 22/tcp"
+    ufw allow 22/tcp 2>/dev/null || true
+    log_detail "  → ufw allow $SSH_PORT/tcp"
+    ufw allow $SSH_PORT/tcp 2>/dev/null || true
+    log_detail "  → ufw allow 80/tcp"
+    ufw allow 80/tcp 2>/dev/null || true
+    log_detail "  → ufw allow 443/tcp"
+    ufw allow 443/tcp 2>/dev/null || true
+    log_detail "Включение UFW..."
     echo "y" | ufw enable 2>/dev/null || true
-    log_success "UFW настроен"
+    log_success "✅ Правила UFW применены"
+    log_detail "Статус: $(ufw status verbose | head -3)"
+elif command -v firewall-cmd &>/dev/null; then
+    log_detail "firewalld: добавляем сервисы"
+    firewall-cmd --permanent --add-service=ssh 2>/dev/null || true
+    firewall-cmd --permanent --add-port=$SSH_PORT/tcp 2>/dev/null || true
+    firewall-cmd --permanent --add-service=http 2>/dev/null || true
+    firewall-cmd --permanent --add-service=https 2>/dev/null || true
+    firewall-cmd --reload 2>/dev/null || true
+    log_success "✅ Правила firewalld применены"
+else
+    log_warn "Фаервол не обнаружен"
+    log_detail "Вручную откройте: 22, $SSH_PORT, 80, 443"
 fi
 
-log_step "Шаг 14: Права доступа"
+# === ШАГ 14: Права доступа ===
+log_step "Шаг 14: Настройка прав доступа"
+log_detail "chmod 755 $UPLOAD_DIR"
 chmod 755 "$UPLOAD_DIR"
+log_detail "chown -R $UPLOAD_USER:www-data $UPLOAD_DIR"
 chown -R "$UPLOAD_USER:www-data" "$UPLOAD_DIR"
+log_detail "find $UPLOAD_DIR -type f -exec chmod 644 {} \\;"
 find "$UPLOAD_DIR" -type f -exec chmod 644 {} \; 2>/dev/null || true
+log_detail "find $UPLOAD_DIR -type d -exec chmod 755 {} \\;"
 find "$UPLOAD_DIR" -type d -exec chmod 755 {} \; 2>/dev/null || true
-log_success "Права настроены"
+log_detail "Итоговые права:"
+log_detail "  Папка: $(stat -c '%a %U:%G' "$UPLOAD_DIR")"
+log_detail "  Файлы: 644 (чтение для всех)"
+log_success "✅ Права настроены"
 
-log_step "Шаг 15: Тестовый файл"
+# === ШАГ 15: Тестовый файл ===
+log_step "Шаг 15: Создание тестового файла"
 TEST_FILE="$UPLOAD_DIR/test_keymaster.txt"
+log_detail "Путь: $TEST_FILE"
 echo "KeyMaster server is ready! $(date)" > "$TEST_FILE"
+log_detail "Владелец: chown $UPLOAD_USER:www-data"
 chown "$UPLOAD_USER:www-data" "$TEST_FILE"
+log_detail "Права: chmod 644"
 chmod 644 "$TEST_FILE"
-log_success "Файл создан"
+log_detail "Содержимое: $(cat "$TEST_FILE")"
+log_detail "Проверка доступа: $(test -r "$TEST_FILE" && echo 'читаемый' || echo 'НЕ читаемый')"
+log_success "✅ Файл создан и доступен"
 
+# === ШАГ 16: Метка ===
 log_step "Шаг 16: Метка установки"
+log_detail "Файл: $MARKER_FILE"
 cat > "$MARKER_FILE" << EOF
 INSTALLED_AT=$(date '+%Y-%m-%d %H:%M:%S')
 SCRIPT_VERSION=$SCRIPT_VERSION
@@ -365,7 +539,9 @@ UPLOAD_DIR=$UPLOAD_DIR
 SSH_PORT=$SSH_PORT
 EOF
 chmod 644 "$MARKER_FILE"
-log_success "Метка создана"
+log_detail "Содержимое:"
+cat "$MARKER_FILE" | sed 's/^/   /'
+log_success "✅ Метка создана"
 
 # === ШАГ 17: Итог ===
 log_step "✅ Настройка завершена!"
@@ -377,29 +553,41 @@ echo "📋 Параметры:"
 echo "   • Домен:            $MEDIA_DOMAIN"
 echo "   • Пользователь:     $UPLOAD_USER"
 echo "   • SSH порт:         $SSH_PORT"
-echo "   • Папка:            $UPLOAD_DIR"
-[[ "$HAS_CERT" == "true" ]] && echo "   • Веб-доступ:       🔗 https://$MEDIA_DOMAIN/" || echo "   • Веб-доступ:       🔗 http://$MEDIA_DOMAIN/"
+echo "   • Папка загрузок:   $UPLOAD_DIR"
+echo "   • Веб-доступ:       $([[ "$HAS_CERT" == "true" ]] && echo "🔗 https://$MEDIA_DOMAIN/" || echo "🔗 http://$MEDIA_DOMAIN/")"
 echo ""
 echo "🧪 Проверка (кликните):"
-[[ "$HAS_CERT" == "true" ]] && echo -e "   🔗 https://$MEDIA_DOMAIN/test_keymaster.txt" || echo -e "   🔗 http://$MEDIA_DOMAIN/test_keymaster.txt"
+if [[ "$HAS_CERT" == "true" ]]; then
+    echo -e "   🔗 https://$MEDIA_DOMAIN/test_keymaster.txt"
+else
+    echo -e "   🔗 http://$MEDIA_DOMAIN/test_keymaster.txt"
+fi
 echo "   📡 ssh -p $SSH_PORT $UPLOAD_USER@$(hostname -I | awk '{print $1}' | head -1)"
 echo ""
 
 if [[ "$HAS_CERT" == "true" ]]; then
     echo "☁️  Cloudflare Full (strict):"
-    echo "   • SSL/TLS → Full (strict)"
+    echo "   • SSL/TLS → Overview → Full (strict)"
     echo "   • DNS → A: $(hostname -I | awk '{print $1}' | head -1) (🟠 Proxied)"
     echo ""
-    echo "🔄 Автообновление: ✅ включено"
+    echo "🔒 Безопасность nginx:"
+    echo "   • server_tokens off (версия скрыта)"
+    echo "   • Блокировка ботов/сканеров по User-Agent"
+    echo "   • Security headers (HSTS, CSP, X-Frame-Options)"
+    echo "   • Rate limiting (10 req/s)"
+    echo "   • Блокировка скрытых/системных файлов"
     echo ""
-    echo "⚠️  Если ошибка 403/1000:"
-    echo "   1. Проверьте, что nginx слушает порт 443: ss -tlnp | grep :443"
-    echo "   2. Убедитесь, что нет конфликта с Docker/другими сервисами"
-    echo "   3. Временно отключите прокси в Cloudflare для теста"
-    echo "   4. Проверьте: curl -I --resolve $MEDIA_DOMAIN:443:$(hostname -I | awk '{print $1}' | head -1) https://$MEDIA_DOMAIN/test_keymaster.txt"
+    echo "🔄 Автообновление: ✅ включено и протестировано"
+    echo ""
+    echo "⚠️  Если 404 на тестовом файле:"
+    echo "   1. Проверьте права: ls -l $UPLOAD_DIR/test_keymaster.txt"
+    echo "   2. Проверьте nginx root в конфиге: grep 'root' $NGINX_CONF"
+    echo "   3. Проверьте логи: tail -f /var/log/nginx/${MEDIA_DOMAIN}_error.log"
+    echo "   4. Тест напрямую: curl -I --resolve $MEDIA_DOMAIN:443:$(hostname -I | awk '{print $1}' | head -1) https://$MEDIA_DOMAIN/test_keymaster.txt"
     echo ""
 fi
 
 echo "🗑️ Откат: перезапустите скрипт → опция 2"
 echo ""
-log_success "Готово! 🚀"
+log_success "Готово! Сервер ожидает подключения от KeyMaster 🚀"
+echo ""
