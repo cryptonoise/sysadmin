@@ -3,7 +3,7 @@
 # Запуск: curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/server4keymaster.sh | bash
 
 # === ВЕРСИЯ СКРИПТА ===
-SCRIPT_VERSION="v1.5.0"
+SCRIPT_VERSION="v1.5.1"
 SCRIPT_NAME="KeyMaster Server Setup"
 
 # === МЕТКА УСТАНОВКИ ===
@@ -67,13 +67,6 @@ if [[ -f "$MARKER_FILE" ]]; then
     case $ACTION_CHOICE in
         2)
             log_step "🗑️  Откат изменений"
-            echo -e "${RED}⚠️  ВНИМАНИЕ! Это действие необратимо!${NC}"
-            echo ""
-            read -p "Вы уверены? Введите YES для подтверждения: " CONFIRM < /dev/tty
-            if [[ "$CONFIRM" != "YES" ]]; then
-                log_warn "Откат отменён пользователем"
-                exit 0
-            fi
             
             # Чтение данных из метки
             PREV_USER=$(grep '^USER=' "$MARKER_FILE" | cut -d'=' -f2)
