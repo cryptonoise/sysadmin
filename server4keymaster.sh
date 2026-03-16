@@ -2,6 +2,10 @@
 # server4keymaster.sh - Настройка сервера для KeyMaster
 # Запуск: curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/server4keymaster.sh | bash
 
+# === ВЕРСИЯ СКРИПТА ===
+SCRIPT_VERSION="v1.2.0"
+SCRIPT_NAME="KeyMaster Server Setup"
+
 set -e
 
 # Цвета для вывода
@@ -10,6 +14,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
 NC='\033[0m'
 
 log_info()    { echo -e "${BLUE}[ℹ️]${NC} $1"; }
@@ -17,6 +22,21 @@ log_success() { echo -e "${GREEN}[✅]${NC} $1"; }
 log_warn()    { echo -e "${YELLOW}[⚠️]${NC} $1"; }
 log_error()   { echo -e "${RED}[❌]${NC} $1"; }
 log_step()    { echo -e "\n${CYAN}────────────────────────────────${NC}"; echo -e "${CYAN}[⚙️]${NC} $1"; echo -e "${CYAN}────────────────────────────────${NC}\n"; }
+
+# === ЗАГОЛОВОК ПРИ ЗАПУСКЕ ===
+print_header() {
+    echo ""
+    echo -e "${MAGENTA}╔════════════════════════════════════════════════════╗${NC}"
+    echo -e "${MAGENTA}║${NC}  ${GREEN}${SCRIPT_NAME}${NC}                        ${MAGENTA}║${NC}"
+    echo -e "${MAGENTA}║${NC}  Версия: ${CYAN}${SCRIPT_VERSION}${NC}                                  ${MAGENTA}║${NC}"
+    echo -e "${MAGENTA}║${NC}  GitHub: cryptonoise/sysadmin                     ${MAGENTA}║${NC}"
+    echo -e "${MAGENTA}╚════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${BLUE}🚀 Инициализация...${NC}"
+    echo ""
+}
+
+print_header
 
 # Проверка прав root
 if [[ $EUID -ne 0 ]]; then
