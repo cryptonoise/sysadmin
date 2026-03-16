@@ -3,7 +3,7 @@
 # Запуск: curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/server4keymaster.sh | bash
 
 # === ВЕРСИЯ СКРИПТА ===
-SCRIPT_VERSION="v3.2"
+SCRIPT_VERSION="v3.3"
 SCRIPT_NAME="KeyMaster Server Setup"
 
 # === МЕТКА УСТАНОВКИ ===
