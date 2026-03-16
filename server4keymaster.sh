@@ -3,7 +3,7 @@
 # Запуск: curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/server4keymaster.sh | bash
 
 # === ВЕРСИЯ СКРИПТА ===
-SCRIPT_VERSION="v1.7"
+SCRIPT_VERSION="v1.8"
 SCRIPT_NAME="KeyMaster Server Setup"
 
 # === МЕТКА УСТАНОВКИ ===
@@ -187,15 +187,34 @@ log_info "Обнаружена ОС: $PRETTY_NAME"
 
 # === ШАГ 1: Ввод домена ===
 log_step "Шаг 1: Настройка домена"
-read -p "🌐 Введите домен для загрузки файлов (например, media.norest.art): " MEDIA_DOMAIN < /dev/tty
-MEDIA_DOMAIN=$(echo "$MEDIA_DOMAIN" | xargs | sed 's|https\?://||' | sed 's|/$||')
 
-if [[ -z "$MEDIA_DOMAIN" ]]; then
-    log_warn "Домен не указан — HTTPS настройка будет пропущена"
-    MEDIA_DOMAIN=""
-else
-    log_success "Домен: $MEDIA_DOMAIN"
-fi
+while true; do
+    read -p "🌐 Введите домен для загрузки файлов: " MEDIA_DOMAIN < /dev/tty
+    MEDIA_DOMAIN=$(echo "$MEDIA_DOMAIN" | xargs | sed 's|https\?://||' | sed 's|/$||')
+    
+    # Проверка на пустой ввод
+    if [[ -z "$MEDIA_DOMAIN" ]]; then
+        log_error "Домен не может быть пустым. Попробуйте снова."
+        continue
+    fi
+    
+    # Проверка на наличие точки в домене
+    if [[ ! "$MEDIA_DOMAIN" =~ \. ]]; then
+        log_error "Неверный формат домена. Домен должен содержать точку (например, media.norest.art). Попробуйте снова."
+        continue
+    fi
+    
+    # Проверка на недопустимые символы
+    if [[ ! "$MEDIA_DOMAIN" =~ ^[a-zA-Z0-9.-]+$ ]]; then
+        log_error "Домен содержит недопустимые символы. Используйте только буквы, цифры, точки и дефисы."
+        continue
+    fi
+    
+    # Все проверки пройдены
+    break
+done
+
+log_success "Домен: $MEDIA_DOMAIN"
 
 # === ШАГ 2: Ввод пользователя ===
 log_step "Шаг 2: Пользователь для загрузки"
