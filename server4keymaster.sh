@@ -31,7 +31,6 @@ print_header() {
     echo ""
     echo -e "${MAGENTA}${SCRIPT_NAME}${NC}"
     echo -e "${CYAN}Версия: ${SCRIPT_VERSION}${NC}"
-    echo -e "${BLUE}GitHub: cryptonoise/sysadmin${NC}"
     echo ""
     echo -e "${BLUE}🚀 Инициализация...${NC}"
     echo ""
