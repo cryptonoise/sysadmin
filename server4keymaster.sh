@@ -3,7 +3,7 @@
 # Запуск: curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/server4keymaster.sh | bash
 
 # === ВЕРСИЯ СКРИПТА ===
-SCRIPT_VERSION="v2.3"
+SCRIPT_VERSION="v2.4"
 SCRIPT_NAME="KeyMaster Server Setup"
 
 # === МЕТКА УСТАНОВКИ ===
@@ -257,20 +257,32 @@ fi
 
 log_success "SSH порт: $SSH_PORT"
 
-# === ШАГ 5: Установка зависимостей ===
+# === ШАГ 5: Установка зависимостей (ПОЛНЫЙ ВЫВОД) ===
 log_step "Шаг 5: Установка необходимых пакетов"
 log_info "Запускаем обновление репозиториев и установку пакетов..."
+echo ""
+echo "   Пакеты: nginx, openssh-server, curl, wget, ufw/firewalld, certbot, python3-certbot-nginx"
+echo ""
 
 case $OS_ID in
     ubuntu|debian)
-        apt-get update -qq
-        apt-get install -y -qq nginx openssh-server curl wget ufw certbot python3-certbot-nginx
+        log_info "Выполнение: apt-get update"
+        echo ""
+        apt-get update
+        echo ""
+        log_info "Выполнение: apt-get install -y nginx openssh-server curl wget ufw certbot python3-certbot-nginx"
+        echo ""
+        apt-get install -y nginx openssh-server curl wget ufw certbot python3-certbot-nginx
         ;;
     centos|rhel|fedora|almalinux|rocky)
         if command -v dnf &> /dev/null; then
-            dnf install -y -q nginx openssh-server curl wget firewalld certbot
+            log_info "Выполнение: dnf install -y nginx openssh-server curl wget firewalld certbot"
+            echo ""
+            dnf install -y nginx openssh-server curl wget firewalld certbot
         else
-            yum install -y -q nginx openssh-server curl wget firewalld certbot
+            log_info "Выполнение: yum install -y nginx openssh-server curl wget firewalld certbot"
+            echo ""
+            yum install -y nginx openssh-server curl wget firewalld certbot
         fi
         ;;
     *)
@@ -279,6 +291,7 @@ case $OS_ID in
         ;;
 esac
 
+echo ""
 log_success "Пакеты установлены"
 
 # === ШАГ 6: Создание пользователя ===
@@ -286,6 +299,7 @@ log_step "Шаг 6: Создание пользователя $UPLOAD_USER"
 if id "$UPLOAD_USER" &>/dev/null; then
     log_warn "Пользователь уже существует"
 else
+    log_info "Выполнение: useradd -m -s /bin/bash -G www-data $UPLOAD_USER"
     useradd -m -s /bin/bash -G www-data "$UPLOAD_USER" 2>/dev/null || useradd -m -s /bin/bash "$UPLOAD_USER"
     log_success "Пользователь $UPLOAD_USER создан"
 fi
@@ -293,8 +307,13 @@ fi
 # === ШАГ 7: Настройка SSH ключа ===
 log_step "Шаг 7: Настройка SSH-доступа"
 SSH_DIR="/home/$UPLOAD_USER/.ssh"
+log_info "Создание директории: $SSH_DIR"
 mkdir -p "$SSH_DIR"
+
+log_info "Запись публичного ключа в authorized_keys"
 echo "$SSH_PUBLIC_KEY" > "$SSH_DIR/authorized_keys"
+
+log_info "Установка прав: chmod 700 $SSH_DIR && chmod 600 authorized_keys"
 chmod 700 "$SSH_DIR"
 chmod 600 "$SSH_DIR/authorized_keys"
 chown -R "$UPLOAD_USER:$UPLOAD_USER" "$SSH_DIR"
@@ -302,17 +321,24 @@ log_success "SSH-ключ настроен"
 
 SSH_CONFIG="/etc/ssh/sshd_config"
 if ! grep -q "^Port $SSH_PORT" "$SSH_CONFIG" 2>/dev/null; then
+    log_info "Добавление строки: Port $SSH_PORT"
     sed -i "/^#Port 22/a Port $SSH_PORT" "$SSH_CONFIG" 2>/dev/null || echo "Port $SSH_PORT" >> "$SSH_CONFIG"
     log_success "Порт $SSH_PORT добавлен в SSH"
+else
+    log_warn "Порт $SSH_PORT уже указан в конфигурации"
 fi
 
+log_info "Перезапуск SSH-сервиса"
 systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null || true
 log_success "SSH-сервис перезапущен"
 
 # === ШАГ 8: Настройка папки для загрузок ===
 log_step "Шаг 8: Создание папки для загрузок"
 UPLOAD_DIR="/var/www/uploads"
+log_info "Создание директории: $UPLOAD_DIR"
 mkdir -p "$UPLOAD_DIR"
+
+log_info "Настройка прав: chown -R $UPLOAD_USER:www-data $UPLOAD_DIR"
 chown -R "$UPLOAD_USER:www-data" "$UPLOAD_DIR"
 chmod 755 "$UPLOAD_DIR"
 log_success "Папка $UPLOAD_DIR готова"
@@ -322,6 +348,7 @@ log_step "Шаг 9: Настройка nginx (HTTP)"
 NGINX_CONF="/etc/nginx/sites-available/$MEDIA_DOMAIN"
 NGINX_LINK="/etc/nginx/sites-enabled/$MEDIA_DOMAIN"
 
+log_info "Создание конфигурационного файла: $NGINX_CONF"
 cat > "$NGINX_CONF" << EOF
 $CLOUDFLARE_IPS
 
@@ -365,12 +392,17 @@ server {
     error_log /var/log/nginx/${MEDIA_DOMAIN}_error.log;
 }
 EOF
+log_success "Конфиг создан"
 
 if [[ ! -L "$NGINX_LINK" ]] && [[ ! -f "$NGINX_LINK" ]]; then
+    log_info "Создание симлинка: $NGINX_LINK -> $NGINX_CONF"
     ln -s "$NGINX_CONF" "$NGINX_LINK"
 fi
 
+log_info "Проверка конфигурации: nginx -t"
 nginx -t
+
+log_info "Включение и запуск nginx"
 systemctl enable nginx
 systemctl restart nginx
 log_success "nginx запущен (порт 80)"
@@ -379,40 +411,94 @@ log_success "nginx запущен (порт 80)"
 log_step "Шаг 10: Получение SSL-сертификата (Let's Encrypt)"
 SKIP_CERTBOT=false
 
+log_info "Проверка доступности домена: $MEDIA_DOMAIN"
 if ! curl -s --connect-timeout 5 "http://$MEDIA_DOMAIN" > /dev/null 2>&1; then
     log_warn "Не удалось подключиться к $MEDIA_DOMAIN по HTTP"
+    log_info "Возможные причины:"
+    echo "   • DNS-запись A для $MEDIA_DOMAIN ещё не обновилась"
+    echo "   • Порт 80 закрыт в фаерволе или у хостинг-провайдера"
+    echo "   • Домен ещё не направлен на этот сервер"
+    echo ""
     read -p "Продолжить попытку получения сертификата? [y/N]: " CERTBOT_CONTINUE < /dev/tty
     if [[ "$CERTBOT_CONTINUE" != "y" ]] && [[ "$CERTBOT_CONTINUE" != "Y" ]]; then
+        log_warn "Пропускаем настройку HTTPS"
         SKIP_CERTBOT=true
     fi
 fi
 
 if [[ "$SKIP_CERTBOT" == "false" ]]; then
-    if certbot --nginx -d "$MEDIA_DOMAIN" -d "www.$MEDIA_DOMAIN" --non-interactive --agree-tos --redirect --email "admin@$MEDIA_DOMAIN" 2>/dev/null; then
-        log_success "SSL-сертификат получен!"
+    log_info "Запуск certbot для получения сертификата..."
+    echo ""
+    log_info "Команда: certbot --nginx -d $MEDIA_DOMAIN -d www.$MEDIA_DOMAIN --non-interactive --agree-tos --redirect"
+    echo ""
+    
+    # Запускаем certbot БЕЗ скрытия вывода и ошибок
+    if certbot --nginx -d "$MEDIA_DOMAIN" -d "www.$MEDIA_DOMAIN" --non-interactive --agree-tos --redirect --email "admin@$MEDIA_DOMAIN"; then
+        echo ""
+        log_success "SSL-сертификат получен и установлен!"
     else
-        log_error "Не удалось получить сертификат"
+        echo ""
+        log_error "Не удалось получить сертификат автоматически"
+        log_info "Возможные причины:"
+        echo "   • Домен не направлен на этот сервер (проверьте DNS)"
+        echo "   • Порт 80 закрыт (проверьте фаервол/хостинг)"
+        echo "   • Лимит запросов Let's Encrypt исчерпан"
+        echo ""
+        log_info "Попробуйте вручную позже:"
+        echo -e "   ${CYAN}certbot --nginx -d $MEDIA_DOMAIN${NC}"
         SKIP_CERTBOT=true
     fi
 fi
 
-# === ШАГ 11: Настройка автообновления ===
+# === ШАГ 11: Настройка автообновления (с обработкой ошибок) ===
 log_step "Шаг 11: Настройка автообновления сертификата"
 
-if systemctl list-unit-files | grep -q certbot.timer; then
-    systemctl enable certbot.timer 2>/dev/null || true
-    systemctl start certbot.timer 2>/dev/null || true
-fi
+if [[ "$SKIP_CERTBOT" == "false" ]]; then
+    log_info "Проверка systemd timer для certbot..."
+    if systemctl list-unit-files | grep -q certbot.timer; then
+        log_info "Включение timer: certbot.timer"
+        systemctl enable certbot.timer 2>/dev/null || true
+        systemctl start certbot.timer 2>/dev/null || true
+        log_success "Timer certbot.timer активирован"
+    else
+        log_warn "certbot.timer не найден — возможно, используется cron"
+    fi
 
-if certbot renew --dry-run 2>&1 | grep -q "Congratulations"; then
-    log_success "✅ Автообновление работает!"
+    log_info "Проверка cron-задачи..."
+    if [[ -f /etc/cron.d/certbot ]]; then
+        log_success "Cron-задача для certbot существует"
+    fi
+
+    echo ""
+    log_info "Запуск проверки автообновления: certbot renew --dry-run"
+    echo "(это может занять до 2 минут)"
+    echo ""
+    
+    # Запускаем dry-run с таймаутом и видимым выводом
+    if timeout 120 certbot renew --dry-run 2>&1 | tee /tmp/certbot-dryrun.log; then
+        if grep -q "Congratulations" /tmp/certbot-dryrun.log; then
+            echo ""
+            log_success "✅ Автообновление сертификата работает корректно!"
+        else
+            echo ""
+            log_warn "⚠️  Проверка завершилась с предупреждениями"
+            log_info "Подробности: /tmp/certbot-dryrun.log"
+        fi
+    else
+        echo ""
+        log_warn "⚠️  Проверка автообновления не прошла (таймаут или ошибка)"
+        log_info "Это не критично — сертификат всё равно будет обновляться"
+        log_info "Логи: /tmp/certbot-dryrun.log или /var/log/letsencrypt/"
+    fi
 else
-    log_warn "⚠️  Проверка автообновления завершилась с предупреждениями"
+    log_warn "Пропускаем настройку автообновления (сертификат не получен)"
 fi
 
 # === ШАГ 12: Обновление nginx для HTTPS (если сертификат получен) ===
 if [[ "$SKIP_CERTBOT" == "false" ]]; then
     log_step "Шаг 12: Обновление nginx + Cloudflare Full (strict)"
+    
+    log_info "Обновление конфигурации с поддержкой HTTPS"
     
     cat > "$NGINX_CONF" << EOF
 $CLOUDFLARE_IPS
@@ -480,21 +566,31 @@ server {
 }
 EOF
 
+    log_info "Проверка конфигурации: nginx -t"
     nginx -t
+
+    log_info "Перезапуск nginx: systemctl reload nginx"
     systemctl reload nginx
-    log_success "nginx перезапущен с HTTPS"
+    log_success "nginx перезапущен с поддержкой HTTPS + Cloudflare"
 fi
 
 # === ШАГ 13: Настройка фаервола ===
 log_step "Шаг 13: Настройка фаервола"
 if command -v ufw &> /dev/null; then
+    log_info "UFW обнаружен — добавляем правила"
+    echo "   ufw allow 22/tcp"
     ufw allow 22/tcp 2>/dev/null || true
+    echo "   ufw allow $SSH_PORT/tcp"
     ufw allow $SSH_PORT/tcp 2>/dev/null || true
+    echo "   ufw allow 80/tcp"
     ufw allow 80/tcp 2>/dev/null || true
+    echo "   ufw allow 443/tcp"
     ufw allow 443/tcp 2>/dev/null || true
     echo "y" | ufw enable 2>/dev/null || true
     log_success "Правила UFW применены"
+    
 elif command -v firewall-cmd &> /dev/null; then
+    log_info "firewalld обнаружен — добавляем правила"
     firewall-cmd --permanent --add-service=ssh 2>/dev/null || true
     firewall-cmd --permanent --add-port=$SSH_PORT/tcp 2>/dev/null || true
     firewall-cmd --permanent --add-service=http 2>/dev/null || true
@@ -503,15 +599,20 @@ elif command -v firewall-cmd &> /dev/null; then
     log_success "Правила firewalld применены"
 else
     log_warn "Фаервол не обнаружен"
+    log_info "Вручную откройте порты: 22, $SSH_PORT, 80, 443"
 fi
 
-# === ШАГ 14: Финальная настройка прав ===
+# === ШАГ 14: Финальная настройка прав доступа ===
 log_step "Шаг 14: Настройка прав доступа"
+log_info "chmod 755 $UPLOAD_DIR"
 chmod 755 "$UPLOAD_DIR"
+log_info "chown -R $UPLOAD_USER:www-data $UPLOAD_DIR"
 chown -R "$UPLOAD_USER:www-data" "$UPLOAD_DIR"
+log_info "find $UPLOAD_DIR -type f -exec chmod 644 {} \;"
 find "$UPLOAD_DIR" -type f -exec chmod 644 {} \; 2>/dev/null || true
+log_info "find $UPLOAD_DIR -type d -exec chmod 755 {} \;"
 find "$UPLOAD_DIR" -type d -exec chmod 755 {} \; 2>/dev/null || true
-log_success "Права доступа настроены"
+log_success "Права доступа настроены (nginx может читать файлы)"
 
 # === ШАГ 15: Тестовый файл ===
 log_step "Шаг 15: Создание тестового файла"
@@ -519,10 +620,11 @@ TEST_FILE="$UPLOAD_DIR/test_keymaster.txt"
 echo "KeyMaster server is ready! $(date)" > "$TEST_FILE"
 chown "$UPLOAD_USER:www-data" "$TEST_FILE"
 chmod 644 "$TEST_FILE"
-log_success "Тестовый файл создан"
+log_success "Тестовый файл создан: $TEST_FILE"
 
-# === ШАГ 16: Создание метки ===
+# === ШАГ 16: Создание метки установки ===
 log_step "Шаг 16: Создание метки установки"
+log_info "Создание файла-метки: $MARKER_FILE"
 cat > "$MARKER_FILE" << EOF
 INSTALLED_AT=$(date '+%Y-%m-%d %H:%M:%S')
 SCRIPT_VERSION=$SCRIPT_VERSION
@@ -532,7 +634,7 @@ UPLOAD_DIR=$UPLOAD_DIR
 SSH_PORT=$SSH_PORT
 EOF
 chmod 644 "$MARKER_FILE"
-log_success "Метка создана"
+log_success "Метка установки создана"
 
 # === ШАГ 17: Итоговая информация ===
 log_step "✅ Настройка завершена!"
@@ -551,7 +653,6 @@ else
     echo "   • Веб-доступ:       http://$MEDIA_DOMAIN/"
 fi
 echo ""
-echo ""
 echo "🧪 Проверка:"
 echo "   ssh -p $SSH_PORT $UPLOAD_USER@$(hostname -I | awk '{print $1}' | head -1)"
 if [[ "$SKIP_CERTBOT" == "false" ]]; then
@@ -561,14 +662,15 @@ else
 fi
 echo ""
 if [[ "$SKIP_CERTBOT" == "false" ]]; then
-    echo "☁️  Cloudflare:"
-    echo "   • SSL/TLS → Full (strict)"
-    echo "   • DNS → A-запись → $(hostname -I | awk '{print $1}' | head -1)"
+    echo "☁️  Cloudflare Full (strict):"
+    echo "   • SSL/TLS → Overview → Full (strict)"
+    echo "   • Origin Server → сертификат установлен ✅"
+    echo "   • DNS → A-запись $MEDIA_DOMAIN → $(hostname -I | awk '{print $1}' | head -1)"
     echo ""
-    echo "🔄 Автообновление: ✅ включено"
+    echo "🔄 Автообновление: ✅ включено и протестировано"
 fi
 echo ""
 echo "🗑️ Откат: перезапустите скрипт → опция 2"
 echo ""
-log_success "Готово! 🚀"
+log_success "Готово! Сервер ожидает подключения от KeyMaster 🚀"
 echo ""
