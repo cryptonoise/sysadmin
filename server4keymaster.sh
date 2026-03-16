@@ -3,7 +3,7 @@
 # Запуск: curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/server4keymaster.sh | bash
 
 # === ВЕРСИЯ СКРИПТА ===
-SCRIPT_VERSION="v4.1"
+SCRIPT_VERSION="v1.3"
 SCRIPT_NAME="KeyMaster Server Setup"
 
 # === МЕТКА УСТАНОВКИ ===
@@ -125,7 +125,7 @@ log_success "Домен: $MEDIA_DOMAIN"
 
 # === ШАГ 2-4: Пользователь, ключ, порт ===
 log_step "Шаг 2: Пользователь"
-read -p "👤 Имя пользователя [keymaster]: " UPLOAD_USER < /dev/tty
+read -p "👤 Имя пользователя [по-умолчанию keymaster]: " UPLOAD_USER < /dev/tty
 UPLOAD_USER=${UPLOAD_USER:-keymaster}
 [[ -z "$UPLOAD_USER" ]] && { log_error "Имя не может быть пустым"; exit 1; }
 log_success "Пользователь: $UPLOAD_USER"
@@ -137,7 +137,7 @@ read -r SSH_PUBLIC_KEY < /dev/tty
 log_success "Ключ принят"
 
 log_step "Шаг 4: SSH-порт"
-read -p "🔌 Порт [6934]: " SSH_PORT < /dev/tty
+read -p "🔌 Порт [по-умолчанию 6934]: " SSH_PORT < /dev/tty
 SSH_PORT=${SSH_PORT:-6934}
 [[ ! "$SSH_PORT" =~ ^[0-9]+$ || "$SSH_PORT" -lt 1 || "$SSH_PORT" -gt 65535 ]] && { log_error "Неверный порт"; exit 1; }
 [[ "$SSH_PORT" == "22" ]] && log_warn "Порт 22 — стандартный"
@@ -214,21 +214,20 @@ log_detail "Права: $(stat -c '%a' "$UPLOAD_DIR")"
 log_success "Папка готова"
 
 # === ШАГ 9: Удаление дефолтного nginx конфига ===
-log_step "Шаг 9: Очистка дефолтных конфигов"
+log_step "Шаг 9: Очистка дефолтных конфигов nginx"
 log_detail "Удаление /etc/nginx/sites-enabled/default"
 rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
 log_detail "Удаление /etc/nginx/conf.d/default.conf"
 rm -f /etc/nginx/conf.d/default.conf 2>/dev/null || true
 log_success "Дефолтные конфиги удалены"
 
-# === ШАГ 10: Создание ПРОСТОГО nginx конфига ===
-log_step "Шаг 10: Настройка nginx (BASIC)"
+# === ШАГ 10: Создание nginx конфига ===
+log_step "Шаг 10: Настройка nginx"
 NGINX_CONF="/etc/nginx/sites-available/$MEDIA_DOMAIN"
 NGINX_LINK="/etc/nginx/sites-enabled/$MEDIA_DOMAIN"
 
 log_detail "Создание конфигурации: $NGINX_CONF"
 
-# === ПРОСТОЙ КОНФИГ — только то, что нужно ===
 cat > "$NGINX_CONF" << EOF
 # Cloudflare: получаем реальный IP клиента
 $CLOUDFLARE_IPS
@@ -376,34 +375,19 @@ log_success "✅ Метка создана"
 
 # === ШАГ 15: Итог ===
 log_step "✅ Настройка завершена!"
-echo "╔════════════════════════════════════════════════════╗"
-echo "║  🎉 Сервер KeyMaster готов к работе!              ║"
-echo "╚════════════════════════════════════════════════════╝"
+echo -e "${RED}────────────────────────────────${NC}"
+echo "🎉 Сервер KeyMaster готов к работе!"
+echo -e "${RED}────────────────────────────────${NC}"
 echo ""
 echo "📋 Параметры:"
 echo "   • Домен:            $MEDIA_DOMAIN"
 echo "   • Пользователь:     $UPLOAD_USER"
 echo "   • SSH порт:         $SSH_PORT"
 echo "   • Папка загрузок:   $UPLOAD_DIR"
-echo "   • Cloudflare SSL:   Flexible (сервер слушает порт 80)"
 echo ""
 echo "🧪 Проверка (кликните):"
 echo -e "   🔗 https://$MEDIA_DOMAIN/test_keymaster.txt"
-echo -e "   🔗 https://$MEDIA_DOMAIN/0002_m0020_Egypt_Dreams_Vacations_camel--DSC_4966.jpg"
-echo "   📡 ssh -p $SSH_PORT $UPLOAD_USER@$(hostname -I | awk '{print $1}' | head -1)"
 echo ""
-echo "☁️  Cloudflare настройки:"
-echo "   • SSL/TLS → Overview → Flexible"
-echo "   • DNS → A-запись $MEDIA_DOMAIN → $(hostname -I | awk '{print $1}' | head -1) (🟠 Proxied)"
 echo ""
-echo "⚠️  Если 404 на файле:"
-echo "   1. Проверьте, что файл есть: ls -l $UPLOAD_DIR/"
-echo "   2. Проверьте права: файл должен быть 644, папка 755"
-echo "   3. Проверьте root в конфиге: grep 'root' $NGINX_CONF"
-echo "   4. Проверьте логи: tail -f /var/log/nginx/${MEDIA_DOMAIN}_error.log"
-echo "   5. Тест напрямую (минуя CF): curl -I http://$(hostname -I | awk '{print $1}' | head -1)/test_keymaster.txt -H 'Host: $MEDIA_DOMAIN'"
-echo ""
-echo "🗑️ Откат: перезапустите скрипт → опция 2"
-echo ""
-log_success "Готово! Сервер ожидает подключения от KeyMaster 🚀"
+log_success "Сервер готов к использованию со скриптом KeyMaster 🚀"
 echo ""
