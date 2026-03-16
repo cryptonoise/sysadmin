@@ -1,5 +1,4 @@
 #!/bin/bash
-# server4keymaster.sh - Настройка сервера для KeyMaster (BASIC Edition)
 # Запуск: curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/server4keymaster.sh | bash
 
 # === ВЕРСИЯ СКРИПТА ===
@@ -24,7 +23,7 @@ log_info()    { echo -e "${BLUE}[ℹ️]${NC} $1"; }
 log_success() { echo -e "${GREEN}[✅]${NC} $1"; }
 log_warn()    { echo -e "${YELLOW}[⚠️]${NC} $1"; }
 log_error()   { echo -e "${RED}[❌]${NC} $1"; }
-log_step()    { echo -e "\n${CYAN}────────────────────────────────${NC}"; echo -e "${CYAN}[⚙️]${NC} $1"; echo -e "${CYAN}────────────────────────────────${NC}\n"; }
+log_step()    { echo -e "\n${CYAN}────────────────────────────────${NC}"; echo -e "${CYAN}[ ⚙️ ]${NC} $1"; echo -e "${CYAN}────────────────────────────────${NC}\n"; }
 log_detail()  { echo -e "   ${CYAN}→${NC} $1"; }
 
 # === Cloudflare IP ranges ===
