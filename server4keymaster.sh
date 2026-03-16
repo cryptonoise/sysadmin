@@ -216,7 +216,7 @@ log_success "Домен: $MEDIA_DOMAIN"
 
 # === ШАГ 2: Ввод пользователя ===
 log_step "Шаг 2: Пользователь для загрузки"
-read -p "👤 Введите имя пользователя для загрузки [keymaster]: " UPLOAD_USER < /dev/tty
+read -p "👤 Введите имя пользователя для загрузки [по-умолачнию keymaster]: " UPLOAD_USER < /dev/tty
 UPLOAD_USER=${UPLOAD_USER:-keymaster}
 UPLOAD_USER=$(echo "$UPLOAD_USER" | xargs)
 
