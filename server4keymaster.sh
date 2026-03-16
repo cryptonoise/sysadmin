@@ -433,7 +433,10 @@ if [[ "$SKIP_CERTBOT" == "false" ]]; then
     echo ""
     
     # Запускаем certbot БЕЗ скрытия вывода и ошибок
-    if certbot --nginx -d "$MEDIA_DOMAIN" -d "www.$MEDIA_DOMAIN" --non-interactive --agree-tos --redirect --email "admin@$MEDIA_DOMAIN"; then
+    if certbot --nginx -d "$MEDIA_DOMAIN" -d "www.$MEDIA_DOMAIN" \
+      --expand --force-renewal \
+      --non-interactive --agree-tos --redirect \
+      --email "admin@$MEDIA_DOMAIN" 2>&1 | tee /tmp/certbot-install.log; then
         echo ""
         log_success "SSL-сертификат получен и установлен!"
     else
