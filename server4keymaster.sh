@@ -1,53 +1,54 @@
 #!/bin/bash
-
-# KeyMaster Server Setup Script
-# Настройка веб-сервера и SFTP для загрузки файлов в OpenAI
+# KeyMaster Server Setup Script v1.1
+# Запускать ТОЛЬКО через: bash script.sh или ./script.sh (не sh!)
 
 set -e
 
-# === Цвета для вывода ===
+# === Цвета ===
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 # === Логирование ===
-log_info()    { echo -e "${BLUE}[ℹ️]${NC} $1"; }
-log_success() { echo -e "${GREEN}[✅]${NC} $1"; }
-log_warn()    { echo -e "${YELLOW}[⚠️]${NC} $1"; }
-log_error()   { echo -e "${RED}[❌]${NC} $1"; }
+log_info()    { printf "${BLUE}[ℹ️]${NC} %s\n" "$1"; }
+log_success() { printf "${GREEN}[✅]${NC} %s\n" "$1"; }
+log_warn()    { printf "${YELLOW}[⚠️]${NC} %s\n" "$1"; }
+log_error()   { printf "${RED}[❌]${NC} %s\n" "$1"; }
 
 # === Проверка прав ===
-if [[ $EUID -ne 0 ]]; then
+if [ "$EUID" -ne 0 ]; then
    log_error "Скрипт должен быть запущен от имени root"
    exit 1
 fi
 
-echo -e "\n┌─────────────────────────────────┐"
-echo -e "│  KeyMaster Server Setup ${GREEN}v1.0${NC}  │"
-echo -e "└─────────────────────────────────┘\n"
+printf "\n┌─────────────────────────────────┐\n"
+printf "│  KeyMaster Server Setup ${GREEN}v1.1${NC}  │\n"
+printf "└─────────────────────────────────┘\n\n"
 
 # === 1. Домен ===
-read -p "🌐 Введите домен для загрузки (например: media.norest.art): " DOMAIN
-DOMAIN=$(echo "$DOMAIN" | sed 's|https\?://||; s|/$||')
-if [[ -z "$DOMAIN" ]]; then
+printf "🌐 Введите домен для загрузки (например: media.norest.art): "
+read -r DOMAIN
+DOMAIN=$(printf "%s" "$DOMAIN" | sed 's|https\?://||; s|/$||')
+if [ -z "$DOMAIN" ]; then
     log_error "Домен не может быть пустым"
     exit 1
 fi
 log_info "Домен: ${GREEN}$DOMAIN${NC}"
 
 # === 2. Пользователь ===
-read -p "👤 Введите имя пользователя для загрузки [keymaster]: " USERNAME
+printf "👤 Введите имя пользователя для загрузки [keymaster]: "
+read -r USERNAME
 USERNAME=${USERNAME:-keymaster}
 log_info "Пользователь: ${GREEN}$USERNAME${NC}"
 
 # === 3. SSH публичный ключ ===
-echo -e "\n🔑 Введите публичный ключ SSH (формат: ssh-rsa AAAA... comment)"
-echo -e "   ${YELLOW}Нажмите Enter после вставки ключа:${NC}"
+printf "\n🔑 Введите публичный ключ SSH (формат: ssh-rsa AAAA... comment)\n"
+printf "   ${YELLOW}Нажмите Enter после вставки ключа:${NC}\n> "
 read -r SSH_PUBLIC_KEY
 
-if [[ -z "$SSH_PUBLIC_KEY" ]]; then
+if [ -z "$SSH_PUBLIC_KEY" ]; then
     log_error "SSH ключ не может быть пустым"
     exit 1
 fi
@@ -59,7 +60,7 @@ UPLOAD_DIR="/var/www/uploads"
 WEB_ROOT="/var/www/html"
 
 # === 5. Создание пользователя ===
-if id "$USERNAME" &>/dev/null; then
+if id "$USERNAME" >/dev/null 2>&1; then
     log_warn "Пользователь $USERNAME уже существует, пропускаем создание"
 else
     log_info "Создаём пользователя $USERNAME..."
@@ -72,7 +73,7 @@ fi
 log_info "Настраиваем SSH-доступ..."
 SSH_DIR="/home/$USERNAME/.ssh"
 mkdir -p "$SSH_DIR"
-echo "$SSH_PUBLIC_KEY" > "$SSH_DIR/authorized_keys"
+printf "%s\n" "$SSH_PUBLIC_KEY" > "$SSH_DIR/authorized_keys"
 chmod 700 "$SSH_DIR"
 chmod 600 "$SSH_DIR/authorized_keys"
 chown -R "$USERNAME:$USERNAME" "$SSH_DIR"
@@ -92,7 +93,7 @@ chmod 755 "$WEB_ROOT"
 log_info "Настраиваем SSH-сервер (порт $SSH_PORT)..."
 
 # Резервная копия конфига
-cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak.$(date +%s)
+cp /etc/ssh/sshd_config "/etc/ssh/sshd_config.bak.$(date +%s)"
 
 # Добавляем конфигурацию для SFTP
 cat >> /etc/ssh/sshd_config << EOF
@@ -109,9 +110,9 @@ Match User $USERNAME
 EOF
 
 # Проверка конфига и перезапуск
-if sshd -t; then
+if sshd -t 2>/dev/null; then
     log_success "Конфигурация SSH валидна"
-    if command -v systemctl &>/dev/null; then
+    if command -v systemctl >/dev/null 2>&1; then
         systemctl restart sshd 2>/dev/null || service ssh restart 2>/dev/null || true
     else
         service ssh restart 2>/dev/null || true
@@ -126,12 +127,12 @@ fi
 # === 9. Настройка Nginx ===
 log_info "Устанавливаем и настраиваем Nginx..."
 
-if ! command -v nginx &>/dev/null; then
-    if [[ -f /etc/debian_version ]]; then
-        apt update -qq && apt install -y nginx > /dev/null 2>&1
-    elif [[ -f /etc/redhat-release ]]; then
-        yum install -y epel-release > /dev/null 2>&1
-        yum install -y nginx > /dev/null 2>&1
+if ! command -v nginx >/dev/null 2>&1; then
+    if [ -f /etc/debian_version ]; then
+        apt update -qq && apt install -y nginx >/dev/null 2>&1
+    elif [ -f /etc/redhat-release ]; then
+        yum install -y epel-release >/dev/null 2>&1
+        yum install -y nginx >/dev/null 2>&1
     else
         log_warn "Не удалось автоматически установить nginx. Установите его вручную."
     fi
@@ -169,11 +170,13 @@ server {
 EOF
 
 # Создаём симлинк если нужно
-[[ -L /etc/nginx/sites-enabled/$DOMAIN ]] || ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/
+if [ ! -L "/etc/nginx/sites-enabled/$DOMAIN" ]; then
+    ln -sf "$NGINX_CONF" /etc/nginx/sites-enabled/
+fi
 
 # Проверка и перезапуск nginx
 if nginx -t 2>/dev/null; then
-    if command -v systemctl &>/dev/null; then
+    if command -v systemctl >/dev/null 2>&1; then
         systemctl reload nginx 2>/dev/null || systemctl restart nginx 2>/dev/null || true
     else
         service nginx reload 2>/dev/null || service nginx restart 2>/dev/null || true
@@ -185,44 +188,54 @@ fi
 
 # === 10. Let's Encrypt (опционально) ===
 log_info "💡 Для HTTPS установите certbot:"
-echo -e "   ${YELLOW}certbot --nginx -d $DOMAIN -d www.$DOMAIN${NC}"
-echo -e "   После установки обновите конфиг: listen 443 ssl + пути к сертификатам"
+printf "   ${YELLOW}certbot --nginx -d %s -d www.%s${NC}\n" "$DOMAIN" "$DOMAIN"
+printf "   После установки обновите конфиг: listen 443 ssl + пути к сертификатам\n"
 
 # === 11. Финальная настройка прав ===
 # Создаём симлинк uploads -> веб-корень для удобства
-if [[ ! -L "$WEB_ROOT/uploads" && "$UPLOAD_DIR" != "$WEB_ROOT/uploads" ]]; then
+if [ ! -L "$WEB_ROOT/uploads" ] && [ "$UPLOAD_DIR" != "$WEB_ROOT/uploads" ]; then
     ln -sf "$UPLOAD_DIR" "$WEB_ROOT/uploads"
     chown -R "$USERNAME:$USERNAME" "$WEB_ROOT/uploads"
 fi
 
-# === 12. Итоговый вывод ===
-echo -e "\n${GREEN}╔════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║${NC}  ${BLUE}✅ Настройка завершена успешно!${NC}  ${GREEN}║${NC}"
-echo -e "${GREEN}╚════════════════════════════════════╝${NC}\n"
+# === 12. Получение внешнего IP ===
+get_public_ip() {
+    curl -s ifconfig.me 2>/dev/null || \
+    curl -s ipinfo.io/ip 2>/dev/null || \
+    hostname -I 2>/dev/null | awk '{print $1}' || \
+    echo "YOUR_SERVER_IP"
+}
 
-echo -e "${YELLOW}📋 Параметры для вашего Python-скрипта:${NC}"
-echo -e "   server_ip        = \"$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')\""
-echo -e "   server_port      = $SSH_PORT"
-echo -e "   username         = \"$USERNAME\""
-echo -e "   private_key_path = \"uploadkey.pem\"  ${BLUE}# ваш приватный ключ${NC}"
-echo -e "   remote_folder    = \"/uploads\"       ${BLUE}# относительно ChrootDirectory${NC}"
-echo -e "   media_domain     = \"https://$DOMAIN\"${NC}"
+SERVER_IP=$(get_public_ip)
 
-echo -e "\n${YELLOW}🔗 Публичный доступ к файлам:${NC}"
-echo -e "   https://$DOMAIN/filename.jpg"
+# === 13. Итоговый вывод ===
+printf "\n${GREEN}╔════════════════════════════════════╗${NC}\n"
+printf "${GREEN}║${NC}  ${BLUE}✅ Настройка завершена успешно!${NC}  ${GREEN}║${NC}\n"
+printf "${GREEN}╚════════════════════════════════════╝${NC}\n\n"
 
-echo -e "\n${YELLOW}📁 Директории:${NC}"
-echo -e "   Загрузка (SFTP): $UPLOAD_DIR"
-echo -e "   Веб-доступ:      $WEB_ROOT"
-echo -e "   Chroot для $USERNAME: $WEB_ROOT"
+printf "${YELLOW}📋 Параметры для вашего Python-скрипта:${NC}\n"
+printf "   server_ip        = \"%s\"\n" "$SERVER_IP"
+printf "   server_port      = %s\n" "$SSH_PORT"
+printf "   username         = \"%s\"\n" "$USERNAME"
+printf "   private_key_path = \"uploadkey.pem\"  ${BLUE}# ваш приватный ключ${NC}\n"
+printf "   remote_folder    = \"/uploads\"       ${BLUE}# относительно ChrootDirectory${NC}\n"
+printf "   media_domain     = \"https://%s\"${NC}\n" "$DOMAIN"
 
-echo -e "\n${YELLOW}🔐 SSH-подключение для загрузки:${NC}"
-echo -e "   sftp -P $SSH_PORT -i uploadkey.pem $USERNAME@$(curl -s ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}')"
-echo -e "   ${BLUE}# Файлы загружать в папку /uploads/${NC}"
+printf "\n${YELLOW}🔗 Публичный доступ к файлам:${NC}\n"
+printf "   https://%s/filename.jpg\n" "$DOMAIN"
 
-echo -e "\n${YELLOW}⚙️  Если файлы не доступны — проверьте:${NC}"
-echo -e "   1. SELinux: ${BLUE}setsebool -P httpd_unified 1${NC} (если включён)"
-echo -e "   2. Firewall: ${BLUE}ufw allow 80/tcp${NC} и ${BLUE}ufw allow $SSH_PORT/tcp${NC}"
-echo -e "   3. Права: ${BLUE}ls -la $WEB_ROOT${NC}"
+printf "\n${YELLOW}📁 Директории:${NC}\n"
+printf "   Загрузка (SFTP): %s\n" "$UPLOAD_DIR"
+printf "   Веб-доступ:      %s\n" "$WEB_ROOT"
+printf "   Chroot для %s: %s\n" "$USERNAME" "$WEB_ROOT"
 
-echo -e "\n${GREEN}🚀 Готово! Запускайте ваш Python-скрипт.${NC}\n"
+printf "\n${YELLOW}🔐 SSH-подключение для загрузки:${NC}\n"
+printf "   sftp -P %s -i uploadkey.pem %s@%s\n" "$SSH_PORT" "$USERNAME" "$SERVER_IP"
+printf "   ${BLUE}# Файлы загружать в папку /uploads/${NC}\n"
+
+printf "\n${YELLOW}⚙️  Если файлы не доступны — проверьте:${NC}\n"
+printf "   1. SELinux: ${BLUE}setsebool -P httpd_unified 1${NC} (если включён)\n"
+printf "   2. Firewall: ${BLUE}ufw allow 80/tcp${NC} и ${BLUE}ufw allow %s/tcp${NC}\n" "$SSH_PORT"
+printf "   3. Права: ${BLUE}ls -la %s${NC}\n" "$WEB_ROOT"
+
+printf "\n${GREEN}🚀 Готово! Запускайте ваш Python-скрипт.${NC}\n"
