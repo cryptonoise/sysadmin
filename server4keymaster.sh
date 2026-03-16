@@ -28,13 +28,10 @@ log_step()    { echo -e "\n${CYAN}───────────────�
 
 # === ЗАГОЛОВОК ПРИ ЗАПУСКЕ ===
 print_header() {
-    local width=56
     echo ""
-    echo -e "${MAGENTA}┌$(printf '─%.0s' $(seq 1 $width))┐${NC}"
-    echo -e "${MAGENTA}│${NC}  ${GREEN}${SCRIPT_NAME}${NC}$(printf ' %.0s' $(seq 1 $((width - ${#SCRIPT_NAME} - 4))))${MAGENTA}│${NC}"
-    echo -e "${MAGENTA}│${NC}  Версия: ${CYAN}${SCRIPT_VERSION}${NC}$(printf ' %.0s' $(seq 1 $((width - ${#SCRIPT_VERSION} - 12))))${MAGENTA}│${NC}"
-    echo -e "${MAGENTA}│${NC}  GitHub: cryptonoise/sysadmin$(printf ' %.0s' $(seq 1 $((width - 32))))${MAGENTA}│${NC}"
-    echo -e "${MAGENTA}└$(printf '─%.0s' $(seq 1 $width))┘${NC}"
+    echo -e "${MAGENTA}${SCRIPT_NAME}${NC}"
+    echo -e "${CYAN}Версия: ${SCRIPT_VERSION}${NC}"
+    echo -e "${BLUE}GitHub: cryptonoise/sysadmin${NC}"
     echo ""
     echo -e "${BLUE}🚀 Инициализация...${NC}"
     echo ""
