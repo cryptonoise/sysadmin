@@ -314,10 +314,6 @@ server {
         return 403;
     }
 
-    # === Rate limiting (базовый) ===
-    limit_req_zone \$binary_remote_addr zone=one:10m rate=10r/s;
-    limit_req zone=one burst=20 nodelay;
-
     # === Логирование с реальным IP через Cloudflare ===
     access_log /var/log/nginx/${MEDIA_DOMAIN}_access.log combined;
     error_log /var/log/nginx/${MEDIA_DOMAIN}_error.log warn;
