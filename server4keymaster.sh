@@ -2,11 +2,12 @@
 # Запуск: curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/server4keymaster.sh | bash
 
 # === ВЕРСИЯ СКРИПТА ===
-SCRIPT_VERSION="v1.3"
-SCRIPT_NAME="KeyMaster Server Setup"
+SCRIPT_VERSION="v1.4"
+SCRIPT_NAME="KeyMaster Docker Setup"
 
 # === МЕТКА УСТАНОВКИ ===
 MARKER_FILE="/etc/keymaster-server-setup.marker"
+DOCKER_DIR="/opt/keymaster-docker"
 
 set -e
 
@@ -77,8 +78,8 @@ if [[ -f "$MARKER_FILE" ]]; then
     echo "   Пользователь: $(grep '^USER=' "$MARKER_FILE" | cut -d'=' -f2)"
     echo ""
     echo -e "${YELLOW}Выберите действие:${NC}"
-    echo "   1 - Продолжить настройку"
-    echo "   2 - 🗑️  ОТКАТИТЬ все изменения"
+    echo "   1 - Продолжить настройку (пересоздать контейнер)"
+    echo "   2 - 🗑️  ОТКАТИТЬ все изменения (удалить контейнер и конфиги)"
     echo "   3 - Выйти"
     read -p "Введите номер [1-3]: " ACTION_CHOICE < /dev/tty
     case $ACTION_CHOICE in
@@ -89,13 +90,31 @@ if [[ -f "$MARKER_FILE" ]]; then
             PREV_UPLOAD_DIR=$(grep '^UPLOAD_DIR=' "$MARKER_FILE" | cut -d'=' -f2)
             PREV_SSH_PORT=$(grep '^SSH_PORT=' "$MARKER_FILE" | cut -d'=' -f2)
             PREV_SSH_PORT=${PREV_SSH_PORT:-6934}
-            echo ""
+            
+            # Остановка и удаление контейнера
+            if command -v docker &>/dev/null; then
+                cd "$DOCKER_DIR" 2>/dev/null && docker compose down 2>/dev/null || true
+                docker rm -f keymaster 2>/dev/null || true
+                log_detail "Контейнер keymaster удален"
+            fi
+            
+            # Удаление файлов докера
+            if [[ -d "$DOCKER_DIR" ]]; then
+                log_detail "Удаление директории $DOCKER_DIR"
+                rm -rf "$DOCKER_DIR"
+            fi
+
+            # Очистка хоста
             [[ -n "$PREV_USER" ]] && id "$PREV_USER" &>/dev/null && { log_detail "Удаление пользователя: $PREV_USER"; userdel -r "$PREV_USER" 2>/dev/null || true; }
-            [[ -n "$PREV_UPLOAD_DIR" ]] && [[ -d "$PREV_UPLOAD_DIR" ]] && { log_detail "Удаление папки: $PREV_UPLOAD_DIR"; rm -rf "$PREV_UPLOAD_DIR"; }
-            [[ -n "$PREV_DOMAIN" ]] && { rm -f "/etc/nginx/sites-available/$PREV_DOMAIN" "/etc/nginx/sites-enabled/$PREV_DOMAIN" 2>/dev/null; systemctl reload nginx 2>/dev/null || true; }
+            # Папку uploads оставляем, если она не в docker dir, но можно удалить если нужно
+            # [[ -n "$PREV_UPLOAD_DIR" ]] && [[ -d "$PREV_UPLOAD_DIR" ]] && { log_detail "Удаление папки: $PREV_UPLOAD_DIR"; rm -rf "$PREV_UPLOAD_DIR"; }
+            
+            # Возврат SSH порта (сложно, так как мы не знаем старый порт, просто удаляем новый)
             SSH_CONFIG="/etc/ssh/sshd_config"
             grep -q "^Port $PREV_SSH_PORT" "$SSH_CONFIG" 2>/dev/null && { sed -i "/^Port $PREV_SSH_PORT/d" "$SSH_CONFIG"; systemctl restart sshd 2>/dev/null || true; }
-            command -v ufw &>/dev/null && { ufw delete allow $PREV_SSH_PORT/tcp 2>/dev/null; ufw delete allow 80/tcp 2>/dev/null; ufw delete allow 443/tcp 2>/dev/null; } || true
+            
+            command -v ufw &>/dev/null && { ufw delete allow $PREV_SSH_PORT/tcp 2>/dev/null; ufw delete allow 80/tcp 2>/dev/null; } || true
+            
             rm -f "$MARKER_FILE"
             echo -e "${GREEN}✅ Откат завершён${NC}"; exit 0
             ;;
@@ -142,47 +161,65 @@ SSH_PORT=${SSH_PORT:-6934}
 [[ "$SSH_PORT" == "22" ]] && log_warn "Порт 22 — стандартный"
 log_success "Порт: $SSH_PORT"
 
-# === ШАГ 5: Пакеты ===
-log_step "Шаг 5: Установка пакетов"
-log_detail "Обновление репозиториев..."
-case $OS_ID in
-    ubuntu|debian)
-        apt-get update
-        log_detail "Установка: nginx, openssh-server, curl, wget, ufw"
-        apt-get install -y nginx openssh-server curl wget ufw
-        ;;
-    centos|rhel|fedora|almalinux|rocky)
-        command -v dnf &>/dev/null && dnf install -y nginx openssh-server curl wget firewalld || yum install -y nginx openssh-server curl wget firewalld
-        ;;
-    *) log_error "Неизвестная ОС: $OS_ID"; exit 1 ;;
-esac
-log_success "Пакеты установлены"
+# === ШАГ 5: Установка Docker ===
+log_step "Шаг 5: Проверка и установка Docker"
 
-# === ШАГ 6: Пользователь ===
-log_step "Шаг 6: Создание пользователя"
+install_docker() {
+    log_detail "Установка зависимостей..."
+    case $OS_ID in
+        ubuntu|debian)
+            apt-get update
+            apt-get install -y ca-certificates curl gnupg lsb-release
+            mkdir -p /etc/apt/keyrings
+            curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg 2>/dev/null || \
+            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/$OS_ID $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+            apt-get update
+            apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+            ;;
+        centos|rhel|fedora|almalinux|rocky)
+            yum install -y yum-utils
+            yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+            yum install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+            systemctl enable --now docker
+            ;;
+        *) log_error "Неизвестная ОС для автоустановки Docker: $OS_ID"; exit 1 ;;
+    esac
+}
+
+if command -v docker &>/dev/null; then
+    log_success "Docker уже установлен: $(docker --version)"
+else
+    log_warn "Docker не найден. Начинается установка..."
+    install_docker
+    log_success "Docker установлен"
+fi
+
+# Проверка docker compose
+if ! docker compose version &>/dev/null; then
+    log_error "Docker установлен, но плагин compose не найден."
+    exit 1
+fi
+
+# === ШАГ 6: Пользователь на хосте (для SSH доступа) ===
+log_step "Шаг 6: Создание пользователя на хосте"
 if id "$UPLOAD_USER" &>/dev/null; then
     log_detail "Пользователь $UPLOAD_USER уже существует"
-    log_warn "Пропускаем создание"
 else
-    log_detail "Выполнение: useradd -m -s /bin/bash -G www-data $UPLOAD_USER"
-    useradd -m -s /bin/bash -G www-data "$UPLOAD_USER" 2>/dev/null || useradd -m -s /bin/bash "$UPLOAD_USER"
-    log_detail "Домашняя папка: /home/$UPLOAD_USER"
-    log_detail "Группы: $(groups $UPLOAD_USER)"
+    log_detail "Выполнение: useradd -m -s /bin/bash $UPLOAD_USER"
+    useradd -m -s /bin/bash "$UPLOAD_USER"
     log_success "Пользователь $UPLOAD_USER создан"
 fi
 
-# === ШАГ 7: SSH ===
-log_step "Шаг 7: Настройка SSH"
+# === ШАГ 7: SSH на хосте ===
+log_step "Шаг 7: Настройка SSH на хосте"
 SSH_DIR="/home/$UPLOAD_USER/.ssh"
 log_detail "Создание директории: $SSH_DIR"
 mkdir -p "$SSH_DIR"
 log_detail "Запись ключа в: $SSH_DIR/authorized_keys"
 echo "$SSH_PUBLIC_KEY" > "$SSH_DIR/authorized_keys"
-log_detail "Установка прав: chmod 700 $SSH_DIR"
 chmod 700 "$SSH_DIR"
-log_detail "Установка прав: chmod 600 $SSH_DIR/authorized_keys"
 chmod 600 "$SSH_DIR/authorized_keys"
-log_detail "Смена владельца: chown -R $UPLOAD_USER:$UPLOAD_USER $SSH_DIR"
 chown -R "$UPLOAD_USER:$UPLOAD_USER" "$SSH_DIR"
 log_success "SSH-ключ настроен"
 
@@ -198,36 +235,30 @@ log_detail "Перезапуск SSH-сервиса"
 systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null || true
 log_success "SSH перезапущен"
 
-# === ШАГ 8: Папка загрузок ===
-log_step "Шаг 8: Папка для загрузок"
-UPLOAD_DIR="/var/www/uploads"
-log_detail "Создание директории: $UPLOAD_DIR"
-mkdir -p "$UPLOAD_DIR"
-log_detail "Настройка прав: chown -R $UPLOAD_USER:www-data $UPLOAD_DIR"
-chown -R "$UPLOAD_USER:www-data" "$UPLOAD_DIR"
-log_detail "Настройка прав: chmod 755 $UPLOAD_DIR"
-chmod 755 "$UPLOAD_DIR"
-log_detail "Папка: $UPLOAD_DIR"
-log_detail "Владелец: $(stat -c '%U:%G' "$UPLOAD_DIR")"
-log_detail "Права: $(stat -c '%a' "$UPLOAD_DIR")"
-log_success "Папка готова"
+# === ШАГ 8: Подготовка папок для Docker ===
+log_step "Шаг 8: Подготовка структуры Docker"
+UPLOAD_DIR_HOST="$DOCKER_DIR/uploads"
+NGINX_CONF_DIR="$DOCKER_DIR/nginx"
 
-# === ШАГ 9: Удаление дефолтного nginx конфига ===
-log_step "Шаг 9: Очистка дефолтных конфигов nginx"
-log_detail "Удаление /etc/nginx/sites-enabled/default"
-rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
-log_detail "Удаление /etc/nginx/conf.d/default.conf"
-rm -f /etc/nginx/conf.d/default.conf 2>/dev/null || true
-log_success "Дефолтные конфиги удалены"
+log_detail "Создание директорий..."
+mkdir -p "$UPLOAD_DIR_HOST"
+mkdir -p "$NGINX_CONF_DIR"
 
-# === ШАГ 10: Создание nginx конфига ===
-log_step "Шаг 10: Настройка nginx"
-NGINX_CONF="/etc/nginx/sites-available/$MEDIA_DOMAIN"
-NGINX_LINK="/etc/nginx/sites-enabled/$MEDIA_DOMAIN"
+# Права на папку uploads, чтобы nginx в контейнере мог читать/писать
+# Внутри официального образа nginx пользователь обычно www-data (uid 33) или nginx (uid 101)
+# Мы сделаем папку доступной для всех на чтение/запись, либо подберем uid.
+# Для простоты chmod 777 на папку uploads внутри vol, или chown 33:33
+chown -R 33:33 "$UPLOAD_DIR_HOST" 
+chmod 755 "$UPLOAD_DIR_HOST"
 
-log_detail "Создание конфигурации: $NGINX_CONF"
+log_success "Структура создана в $DOCKER_DIR"
 
-cat > "$NGINX_CONF" << EOF
+# === ШАГ 9: Генерация Nginx конфига ===
+log_step "Шаг 9: Генерация конфигурации Nginx"
+
+NGINX_CONF_FILE="$NGINX_CONF_DIR/default.conf"
+
+cat > "$NGINX_CONF_FILE" << EOF
 # Cloudflare: получаем реальный IP клиента
 $CLOUDFLARE_IPS
 
@@ -237,8 +268,8 @@ server {
     
     server_name $MEDIA_DOMAIN www.$MEDIA_DOMAIN;
     
-    # Корневая папка с файлами
-    root $UPLOAD_DIR;
+    # Корневая папка с файлами (путь внутри контейнера)
+    root /usr/share/nginx/html;
     index index.html;
     
     # Скрываем версию nginx
@@ -282,28 +313,50 @@ server {
     }
     
     # Логирование
-    access_log /var/log/nginx/${MEDIA_DOMAIN}_access.log;
-    error_log /var/log/nginx/${MEDIA_DOMAIN}_error.log;
+    access_log /var/log/nginx/access.log;
+    error_log /var/log/nginx/error.log;
 }
 EOF
 
-log_success "Конфиг создан"
+log_success "Конфиг nginx создан"
 
-# Создаём симлинк
-if [[ ! -L "$NGINX_LINK" ]] && [[ ! -f "$NGINX_LINK" ]]; then
-    log_detail "Создание симлинка: $NGINX_LINK -> $NGINX_CONF"
-    ln -s "$NGINX_CONF" "$NGINX_LINK"
-fi
+# === ШАГ 10: Создание Docker Compose файла ===
+log_step "Шаг 10: Создание docker-compose.yml"
 
-# Проверка и перезагрузка nginx
-log_detail "Проверка конфигурации: nginx -t"
-nginx -t
-log_detail "Перезагрузка nginx: systemctl reload nginx"
-systemctl reload nginx
-log_success "nginx перезапущен"
+COMPOSE_FILE="$DOCKER_DIR/docker-compose.yml"
 
-# === ШАГ 11: Фаервол ===
-log_step "Шаг 11: Настройка фаервола"
+cat > "$COMPOSE_FILE" << EOF
+version: '3.8'
+
+services:
+  keymaster:
+    image: nginx:alpine
+    container_name: keymaster
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./uploads:/usr/share/nginx/html:rw
+    networks:
+      - web-net
+
+networks:
+  web-net:
+    driver: bridge
+EOF
+
+log_success "docker-compose.yml создан"
+
+# === ШАГ 11: Запуск контейнера ===
+log_step "Шаг 11: Запуск контейнера keymaster"
+cd "$DOCKER_DIR"
+docker compose up -d
+log_success "Контейнер запущен"
+log_detail "Статус: $(docker ps --filter name=keymaster --format '{{.Status}}')"
+
+# === ШАГ 12: Фаервол на хосте ===
+log_step "Шаг 12: Настройка фаервола на хосте"
 if command -v ufw &>/dev/null; then
     log_detail "UFW: разрешаем порты"
     log_detail "  → ufw allow 22/tcp"
@@ -315,7 +368,6 @@ if command -v ufw &>/dev/null; then
     log_detail "Включение UFW..."
     echo "y" | ufw enable 2>/dev/null || true
     log_success "✅ Правила UFW применены"
-    log_detail "Статус: $(ufw status verbose | head -3)"
 elif command -v firewall-cmd &>/dev/null; then
     log_detail "firewalld: добавляем сервисы"
     firewall-cmd --permanent --add-service=ssh 2>/dev/null || true
@@ -328,32 +380,14 @@ else
     log_detail "Вручную откройте: 22, $SSH_PORT, 80"
 fi
 
-# === ШАГ 12: Права доступа ===
-log_step "Шаг 12: Настройка прав доступа"
-log_detail "chmod 755 $UPLOAD_DIR"
-chmod 755 "$UPLOAD_DIR"
-log_detail "chown -R $UPLOAD_USER:www-data $UPLOAD_DIR"
-chown -R "$UPLOAD_USER:www-data" "$UPLOAD_DIR"
-log_detail "find $UPLOAD_DIR -type f -exec chmod 644 {} \\;"
-find "$UPLOAD_DIR" -type f -exec chmod 644 {} \; 2>/dev/null || true
-log_detail "find $UPLOAD_DIR -type d -exec chmod 755 {} \\;"
-find "$UPLOAD_DIR" -type d -exec chmod 755 {} \; 2>/dev/null || true
-log_detail "Итоговые права:"
-log_detail "  Папка: $(stat -c '%a %U:%G' "$UPLOAD_DIR")"
-log_detail "  Файлы: 644 (чтение для всех)"
-log_success "✅ Права настроены"
-
 # === ШАГ 13: Тестовый файл ===
 log_step "Шаг 13: Создание тестового файла"
-TEST_FILE="$UPLOAD_DIR/test_keymaster.txt"
+TEST_FILE="$UPLOAD_DIR_HOST/test_keymaster.txt"
 log_detail "Путь: $TEST_FILE"
 echo "KeyMaster server is ready! $(date)" > "$TEST_FILE"
-log_detail "Владелец: chown $UPLOAD_USER:www-data"
-chown "$UPLOAD_USER:www-data" "$TEST_FILE"
-log_detail "Права: chmod 644"
+# Важно: права внутри volume должны позволять nginx читать
+chown 33:33 "$TEST_FILE" 2>/dev/null || true
 chmod 644 "$TEST_FILE"
-log_detail "Содержимое: $(cat "$TEST_FILE")"
-log_detail "Проверка доступа: $(test -r "$TEST_FILE" && echo 'читаемый' || echo 'НЕ читаемый')"
 log_success "✅ Файл создан и доступен"
 
 # === ШАГ 14: Метка ===
@@ -364,26 +398,31 @@ INSTALLED_AT=$(date '+%Y-%m-%d %H:%M:%S')
 SCRIPT_VERSION=$SCRIPT_VERSION
 DOMAIN=$MEDIA_DOMAIN
 USER=$UPLOAD_USER
-UPLOAD_DIR=$UPLOAD_DIR
+UPLOAD_DIR=$UPLOAD_DIR_HOST
 SSH_PORT=$SSH_PORT
+DOCKER_DIR=$DOCKER_DIR
 EOF
 chmod 644 "$MARKER_FILE"
-log_detail "Содержимое:"
-cat "$MARKER_FILE" | sed 's/^/   /'
 log_success "✅ Метка создана"
-
+ 
 # === ШАГ 15: Итог ===
 log_step "✅ Настройка завершена!"
 echo -e "${RED}────────────────────────────────${NC}"
-echo "🎉 Сервер KeyMaster готов к работе!"
+echo "🎉 Сервер KeyMaster (Docker) готов к работе!"
 echo -e "${RED}────────────────────────────────${NC}"
 echo ""
 echo "📋 Параметры:"
 echo "   • Домен:            $MEDIA_DOMAIN"
 echo "   • Пользователь:     $UPLOAD_USER"
 echo "   • SSH порт:         $SSH_PORT"
-echo "   • Папка загрузок:   $UPLOAD_DIR"
+echo "   • Папка загрузок:   $UPLOAD_DIR_HOST"
+echo "   • Контейнер:        keymaster"
+echo ""
+echo "🛠 Управление:"
+echo "   • Логи:             docker logs -f keymaster"
+echo "   • Перезагрузка:     cd $DOCKER_DIR && docker compose restart"
+echo "   • Остановка:        cd $DOCKER_DIR && docker compose down"
 echo ""
 echo "🧪 Проверка (кликните):"
-echo -e "   🔗 https://$MEDIA_DOMAIN/test_keymaster.txt"
+echo -e "   🔗 http://$MEDIA_DOMAIN/test_keymaster.txt"
 echo ""
