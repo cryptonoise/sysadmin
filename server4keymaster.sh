@@ -2,12 +2,13 @@
 # Запуск: curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/server4keymaster.sh | bash
 
 # === ВЕРСИЯ СКРИПТА ===
-SCRIPT_VERSION="v1.4"
+SCRIPT_VERSION="v1.5"
 SCRIPT_NAME="KeyMaster Server"
 
 # === МЕТКА УСТАНОВКИ ===
 MARKER_FILE="/etc/keymaster-server-setup.marker"
 DOCKER_DIR="/opt/keymaster-docker"
+UPLOAD_DIR_HOST="/var/www/keymaster-media"  # 🎯 Новый путь для загрузок
 
 set -e
 
@@ -106,10 +107,9 @@ if [[ -f "$MARKER_FILE" ]]; then
 
             # Очистка хоста
             [[ -n "$PREV_USER" ]] && id "$PREV_USER" &>/dev/null && { log_detail "Удаление пользователя: $PREV_USER"; userdel -r "$PREV_USER" 2>/dev/null || true; }
-            # Папку uploads оставляем, если она не в docker dir, но можно удалить если нужно
-            # [[ -n "$PREV_UPLOAD_DIR" ]] && [[ -d "$PREV_UPLOAD_DIR" ]] && { log_detail "Удаление папки: $PREV_UPLOAD_DIR"; rm -rf "$PREV_UPLOAD_DIR"; }
+            [[ -n "$PREV_UPLOAD_DIR" ]] && [[ -d "$PREV_UPLOAD_DIR" ]] && { log_detail "Удаление папки: $PREV_UPLOAD_DIR"; rm -rf "$PREV_UPLOAD_DIR"; }
             
-            # Возврат SSH порта (сложно, так как мы не знаем старый порт, просто удаляем новый)
+            # Возврат SSH порта
             SSH_CONFIG="/etc/ssh/sshd_config"
             grep -q "^Port $PREV_SSH_PORT" "$SSH_CONFIG" 2>/dev/null && { sed -i "/^Port $PREV_SSH_PORT/d" "$SSH_CONFIG"; systemctl restart sshd 2>/dev/null || true; }
             
@@ -236,22 +236,24 @@ systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null || true
 log_success "SSH перезапущен"
 
 # === ШАГ 8: Подготовка папок для Docker ===
-log_step "Шаг 8: Подготовка структуры Docker"
-UPLOAD_DIR_HOST="$DOCKER_DIR/uploads"
+log_step "Шаг 8: Подготовка структуры папок"
+
 NGINX_CONF_DIR="$DOCKER_DIR/nginx"
 
 log_detail "Создание директорий..."
 mkdir -p "$UPLOAD_DIR_HOST"
 mkdir -p "$NGINX_CONF_DIR"
+mkdir -p "$DOCKER_DIR"
 
-# Права на папку uploads, чтобы nginx в контейнере мог читать/писать
-# Внутри официального образа nginx пользователь обычно www-data (uid 33) или nginx (uid 101)
-# Мы сделаем папку доступной для всех на чтение/запись, либо подберем uid.
-# Для простоты chmod 777 на папку uploads внутри vol, или chown 33:33
-chown -R 33:33 "$UPLOAD_DIR_HOST" 
-chmod 755 "$UPLOAD_DIR_HOST"
+# Права на папку uploads — nginx в контейнере работает от uid 33 (www-data)
+# Делаем папку доступной для записи пользователю ключа и для контейнера
+chown -R "$UPLOAD_USER:33" "$UPLOAD_DIR_HOST"
+chmod 775 "$UPLOAD_DIR_HOST"
 
-log_success "Структура создана в $DOCKER_DIR"
+log_success "Структура создана:"
+log_detail "  • Загрузки: $UPLOAD_DIR_HOST"
+log_detail "  • Конфиги:  $NGINX_CONF_DIR"
+log_detail "  • Docker:   $DOCKER_DIR"
 
 # === ШАГ 9: Генерация Nginx конфига ===
 log_step "Шаг 9: Генерация конфигурации Nginx"
@@ -337,7 +339,7 @@ services:
       - "80:80"
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./uploads:/usr/share/nginx/html:rw
+      - ${UPLOAD_DIR_HOST}:/usr/share/nginx/html:rw
     networks:
       - web-net
 
@@ -368,6 +370,7 @@ if command -v ufw &>/dev/null; then
     log_detail "Включение UFW..."
     echo "y" | ufw enable 2>/dev/null || true
     log_success "✅ Правила UFW применены"
+    log_detail "Статус: $(ufw status verbose | head -3)"
 elif command -v firewall-cmd &>/dev/null; then
     log_detail "firewalld: добавляем сервисы"
     firewall-cmd --permanent --add-service=ssh 2>/dev/null || true
@@ -385,9 +388,9 @@ log_step "Шаг 13: Создание тестового файла"
 TEST_FILE="$UPLOAD_DIR_HOST/test_keymaster.txt"
 log_detail "Путь: $TEST_FILE"
 echo "KeyMaster server is ready! $(date)" > "$TEST_FILE"
-# Важно: права внутри volume должны позволять nginx читать
-chown 33:33 "$TEST_FILE" 2>/dev/null || true
-chmod 644 "$TEST_FILE"
+# Права для чтения веб-сервером и записи пользователем
+chown "$UPLOAD_USER:33" "$TEST_FILE" 2>/dev/null || true
+chmod 664 "$TEST_FILE"
 log_success "✅ Файл создан и доступен"
 
 # === ШАГ 14: Метка ===
@@ -403,6 +406,8 @@ SSH_PORT=$SSH_PORT
 DOCKER_DIR=$DOCKER_DIR
 EOF
 chmod 644 "$MARKER_FILE"
+log_detail "Содержимое:"
+cat "$MARKER_FILE" | sed 's/^/   /'
 log_success "✅ Метка создана"
  
 # === ШАГ 15: Итог ===
