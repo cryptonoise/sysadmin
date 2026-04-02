@@ -2,13 +2,13 @@
 # Запуск: curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/server4keymaster.sh | bash
 
 # === ВЕРСИЯ СКРИПТА ===
-SCRIPT_VERSION="v1.5"
+SCRIPT_VERSION="v1.6"
 SCRIPT_NAME="KeyMaster Server"
 
 # === МЕТКА УСТАНОВКИ ===
 MARKER_FILE="/etc/keymaster-server-setup.marker"
 DOCKER_DIR="/opt/keymaster-docker"
-UPLOAD_DIR_HOST="/var/www/keymaster-media"  # 🎯 Новый путь для загрузок
+UPLOAD_DIR_HOST="/var/www/keymaster-media"
 
 set -e
 
@@ -52,6 +52,7 @@ CLOUDFLARE_IPS='
     set_real_ip_from 2405:8100::/32;
     set_real_ip_from 2a06:98c0::/29;
     set_real_ip_from 2c0f:f248::/32;
+    set_real_ip_recursive on;
     real_ip_header CF-Connecting-IP;'
 
 # === ЗАГОЛОВОК ===
@@ -92,29 +93,20 @@ if [[ -f "$MARKER_FILE" ]]; then
             PREV_SSH_PORT=$(grep '^SSH_PORT=' "$MARKER_FILE" | cut -d'=' -f2)
             PREV_SSH_PORT=${PREV_SSH_PORT:-6934}
             
-            # Остановка и удаление контейнера
             if command -v docker &>/dev/null; then
                 cd "$DOCKER_DIR" 2>/dev/null && docker compose down 2>/dev/null || true
                 docker rm -f keymaster 2>/dev/null || true
                 log_detail "Контейнер keymaster удален"
             fi
-            
-            # Удаление файлов докера
             if [[ -d "$DOCKER_DIR" ]]; then
                 log_detail "Удаление директории $DOCKER_DIR"
                 rm -rf "$DOCKER_DIR"
             fi
-
-            # Очистка хоста
             [[ -n "$PREV_USER" ]] && id "$PREV_USER" &>/dev/null && { log_detail "Удаление пользователя: $PREV_USER"; userdel -r "$PREV_USER" 2>/dev/null || true; }
             [[ -n "$PREV_UPLOAD_DIR" ]] && [[ -d "$PREV_UPLOAD_DIR" ]] && { log_detail "Удаление папки: $PREV_UPLOAD_DIR"; rm -rf "$PREV_UPLOAD_DIR"; }
-            
-            # Возврат SSH порта
             SSH_CONFIG="/etc/ssh/sshd_config"
             grep -q "^Port $PREV_SSH_PORT" "$SSH_CONFIG" 2>/dev/null && { sed -i "/^Port $PREV_SSH_PORT/d" "$SSH_CONFIG"; systemctl restart sshd 2>/dev/null || true; }
-            
             command -v ufw &>/dev/null && { ufw delete allow $PREV_SSH_PORT/tcp 2>/dev/null; ufw delete allow 80/tcp 2>/dev/null; } || true
-            
             rm -f "$MARKER_FILE"
             echo -e "${GREEN}✅ Откат завершён${NC}"; exit 0
             ;;
@@ -195,13 +187,12 @@ else
     log_success "Docker установлен"
 fi
 
-# Проверка docker compose
 if ! docker compose version &>/dev/null; then
     log_error "Docker установлен, но плагин compose не найден."
     exit 1
 fi
 
-# === ШАГ 6: Пользователь на хосте (для SSH доступа) ===
+# === ШАГ 6: Пользователь на хосте ===
 log_step "Шаг 6: Создание пользователя на хосте"
 if id "$UPLOAD_USER" &>/dev/null; then
     log_detail "Пользователь $UPLOAD_USER уже существует"
@@ -235,7 +226,7 @@ log_detail "Перезапуск SSH-сервиса"
 systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null || true
 log_success "SSH перезапущен"
 
-# === ШАГ 8: Подготовка папок для Docker ===
+# === ШАГ 8: Подготовка папок ===
 log_step "Шаг 8: Подготовка структуры папок"
 
 NGINX_CONF_DIR="$DOCKER_DIR/nginx"
@@ -245,55 +236,85 @@ mkdir -p "$UPLOAD_DIR_HOST"
 mkdir -p "$NGINX_CONF_DIR"
 mkdir -p "$DOCKER_DIR"
 
-# Права на папку uploads — nginx в контейнере работает от uid 33 (www-data)
-# Делаем папку доступной для записи пользователю ключа и для контейнера
+# Права: пользователь + www-data (uid 33) для контейнера
 chown -R "$UPLOAD_USER:33" "$UPLOAD_DIR_HOST"
 chmod 775 "$UPLOAD_DIR_HOST"
+
+# ACL для надёжного совместного доступа
+command -v setfacl &>/dev/null && {
+    setfacl -d -m u::rwx,g::rx,o::rx "$UPLOAD_DIR_HOST" 2>/dev/null || true
+    setfacl -m u::rwx,g::rx,o::rx "$UPLOAD_DIR_HOST" 2>/dev/null || true
+    log_detail "ACL настроены"
+} || log_detail "setfacl не доступен, используем стандартные права"
+
+# Индекс-файл
+echo "KeyMaster Media Server" > "$UPLOAD_DIR_HOST/index.html"
+chown "$UPLOAD_USER:33" "$UPLOAD_DIR_HOST/index.html"
+chmod 644 "$UPLOAD_DIR_HOST/index.html"
 
 log_success "Структура создана:"
 log_detail "  • Загрузки: $UPLOAD_DIR_HOST"
 log_detail "  • Конфиги:  $NGINX_CONF_DIR"
 log_detail "  • Docker:   $DOCKER_DIR"
 
-# === ШАГ 9: Генерация Nginx конфига ===
+# === ШАГ 9: Генерация Nginx конфига (ОПТИМИЗИРОВАН) ===
 log_step "Шаг 9: Генерация конфигурации Nginx"
 
 NGINX_CONF_FILE="$NGINX_CONF_DIR/default.conf"
 
-cat > "$NGINX_CONF_FILE" << EOF
-# Cloudflare: получаем реальный IP клиента
-$CLOUDFLARE_IPS
+cat > "$NGINX_CONF_FILE" << 'NGINX_EOF'
+# === ОПТИМИЗАЦИЯ ДЛЯ OPENAI ===
+proxy_read_timeout 300s;
+proxy_send_timeout 300s;
+send_timeout 300s;
+
+# Cloudflare: реальный IP
+CLOUDFLARE_IPS
+
+# === TCP ОПТИМИЗАЦИИ ===
+sendfile on;
+tcp_nopush on;
+tcp_nodelay on;
+keepalive_timeout 65;
+keepalive_requests 100;
+
+# === СЖАТИЕ (только текст) ===
+gzip on;
+gzip_vary on;
+gzip_proxied any;
+gzip_comp_level 6;
+gzip_min_length 256;
+gzip_types text/plain text/css text/xml application/json application/javascript application/rss+xml application/atom+xml image/svg+xml;
 
 server {
     listen 80;
     listen [::]:80;
     
-    server_name $MEDIA_DOMAIN www.$MEDIA_DOMAIN;
+    server_name MEDIA_DOMAIN_PLACEHOLDER www.MEDIA_DOMAIN_PLACEHOLDER;
     
-    # Корневая папка с файлами (путь внутри контейнера)
     root /usr/share/nginx/html;
     index index.html;
     
-    # Скрываем версию nginx
     server_tokens off;
-    
-    # Разрешаем большие файлы (до 100MB для OpenAI)
     client_max_body_size 100M;
     
-    # CORS заголовки для OpenAI
-    add_header Access-Control-Allow-Origin *;
-    add_header Access-Control-Allow-Methods 'GET, OPTIONS';
-    add_header Access-Control-Allow-Headers 'Content-Type';
+    # === КЭШИРОВАНИЕ МЕДИА ===
+    location ~* \.(jpg|jpeg|png|gif|webp|mp4|mov|avi|mkv|wmv)$ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        add_header Access-Control-Allow-Origin * always;
+        access_log off;
+    }
     
-    # Основной location — раздача файлов
+    # CORS для OpenAI
+    add_header Access-Control-Allow-Origin * always;
+    add_header Access-Control-Allow-Methods 'GET, OPTIONS' always;
+    add_header Access-Control-Allow-Headers 'Content-Type, Accept, Authorization' always;
+    
     location / {
-        # Если файл есть — отдаём, если нет — 404
-        try_files \$uri \$uri/ =404;
-        
-        # Отключаем листинг директорий
+        try_files $uri $uri/ =404;
         autoindex off;
         
-        # MIME-типы для изображений и видео
         types {
             image/jpeg jpg jpeg;
             image/png png;
@@ -304,25 +325,29 @@ server {
             video/x-msvideo avi;
             video/x-matroska mkv;
             video/x-ms-wmv wmv;
+            application/octet-stream bin;
         }
         default_type application/octet-stream;
+        
+        add_header X-Content-Type-Options nosniff always;
     }
     
-    # Блокируем доступ к скрытым файлам (.git, .env, .htaccess и т.д.)
     location ~ /\. {
         deny all;
         return 404;
     }
     
-    # Логирование
     access_log /var/log/nginx/access.log;
-    error_log /var/log/nginx/error.log;
+    error_log /var/log/nginx/error.log warn;
 }
-EOF
+NGINX_EOF
+
+# Подстановка домена в конфиг
+sed -i "s/MEDIA_DOMAIN_PLACEHOLDER/$MEDIA_DOMAIN/g" "$NGINX_CONF_FILE"
 
 log_success "Конфиг nginx создан"
 
-# === ШАГ 10: Создание Docker Compose файла ===
+# === ШАГ 10: Docker Compose ===
 log_step "Шаг 10: Создание docker-compose.yml"
 
 COMPOSE_FILE="$DOCKER_DIR/docker-compose.yml"
@@ -340,8 +365,16 @@ services:
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
       - ${UPLOAD_DIR_HOST}:/usr/share/nginx/html:rw
+    sysctls:
+      - net.core.somaxconn=1024
     networks:
       - web-net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/test_keymaster.txt"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
 
 networks:
   web-net:
@@ -354,48 +387,56 @@ log_success "docker-compose.yml создан"
 log_step "Шаг 11: Запуск контейнера keymaster"
 cd "$DOCKER_DIR"
 docker compose up -d
+sleep 3
 log_success "Контейнер запущен"
 log_detail "Статус: $(docker ps --filter name=keymaster --format '{{.Status}}')"
 
-# === ШАГ 12: Фаервол на хосте ===
-log_step "Шаг 12: Настройка фаервола на хосте"
+# === ШАГ 12: Проверка доступности ===
+log_step "Шаг 12: Проверка доступности медиа"
+if docker exec keymaster test -r /usr/share/nginx/html/test_keymaster.txt 2>/dev/null; then
+    log_success "✅ Файл доступен внутри контейнера"
+else
+    log_warn "⚠️ Файл не читается внутри контейнера"
+fi
+
+if command -v curl &>/dev/null; then
+    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1/test_keymaster.txt" 2>/dev/null || echo "000")
+    if [[ "$HTTP_CODE" == "200" ]]; then
+        log_success "✅ Файл доступен по HTTP (код: $HTTP_CODE)"
+    else
+        log_warn "⚠️ HTTP-проверка вернула код: $HTTP_CODE"
+    fi
+fi
+
+# === ШАГ 13: Фаервол ===
+log_step "Шаг 13: Настройка фаервола"
 if command -v ufw &>/dev/null; then
     log_detail "UFW: разрешаем порты"
-    log_detail "  → ufw allow 22/tcp"
     ufw allow 22/tcp 2>/dev/null || true
-    log_detail "  → ufw allow $SSH_PORT/tcp"
     ufw allow $SSH_PORT/tcp 2>/dev/null || true
-    log_detail "  → ufw allow 80/tcp"
     ufw allow 80/tcp 2>/dev/null || true
-    log_detail "Включение UFW..."
     echo "y" | ufw enable 2>/dev/null || true
     log_success "✅ Правила UFW применены"
-    log_detail "Статус: $(ufw status verbose | head -3)"
 elif command -v firewall-cmd &>/dev/null; then
-    log_detail "firewalld: добавляем сервисы"
     firewall-cmd --permanent --add-service=ssh 2>/dev/null || true
     firewall-cmd --permanent --add-port=$SSH_PORT/tcp 2>/dev/null || true
     firewall-cmd --permanent --add-service=http 2>/dev/null || true
     firewall-cmd --reload 2>/dev/null || true
     log_success "✅ Правила firewalld применены"
 else
-    log_warn "Фаервол не обнаружен"
-    log_detail "Вручную откройте: 22, $SSH_PORT, 80"
+    log_warn "Фаервол не обнаружен — откройте порты 22, $SSH_PORT, 80 вручную"
 fi
 
-# === ШАГ 13: Тестовый файл ===
-log_step "Шаг 13: Создание тестового файла"
+# === ШАГ 14: Тестовый файл ===
+log_step "Шаг 14: Создание тестового файла"
 TEST_FILE="$UPLOAD_DIR_HOST/test_keymaster.txt"
-log_detail "Путь: $TEST_FILE"
 echo "KeyMaster server is ready! $(date)" > "$TEST_FILE"
-# Права для чтения веб-сервером и записи пользователем
 chown "$UPLOAD_USER:33" "$TEST_FILE" 2>/dev/null || true
 chmod 664 "$TEST_FILE"
-log_success "✅ Файл создан и доступен"
+log_success "✅ Файл создан: $TEST_FILE"
 
-# === ШАГ 14: Метка ===
-log_step "Шаг 14: Метка установки"
-log_detail "Файл: $MARKER_FILE"
+# === ШАГ 15: Метка ===
+log_step "Шаг 15: Метка установки"
 cat > "$MARKER_FILE" << EOF
 INSTALLED_AT=$(date '+%Y-%m-%d %H:%M:%S')
 SCRIPT_VERSION=$SCRIPT_VERSION
@@ -406,11 +447,9 @@ SSH_PORT=$SSH_PORT
 DOCKER_DIR=$DOCKER_DIR
 EOF
 chmod 644 "$MARKER_FILE"
-log_detail "Содержимое:"
-cat "$MARKER_FILE" | sed 's/^/   /'
 log_success "✅ Метка создана"
  
-# === ШАГ 15: Итог ===
+# === ШАГ 16: Итог ===
 log_step "✅ Настройка завершена!"
 echo -e "${RED}────────────────────────────────${NC}"
 echo "🎉 Сервер KeyMaster готов к работе!"
@@ -428,6 +467,12 @@ echo "   • Логи:             docker logs -f keymaster"
 echo "   • Перезагрузка:     cd $DOCKER_DIR && docker compose restart"
 echo "   • Остановка:        cd $DOCKER_DIR && docker compose down"
 echo ""
-echo "🧪 Проверка (кликните):"
+echo -e "${YELLOW}⚠️  Cloudflare:${NC}"
+echo "   • Если используете прокси (оранжевое облачко):"
+echo "     - DNS → media → Edit → Proxy status: OFF (серое)"
+echo "     - Или WAF правило: Allow 'OpenAI' в User-Agent"
+echo "   • SSL/TLS → Full (strict)"
+echo ""
+echo "🧪 Проверка:"
 echo -e "   🔗 http://$MEDIA_DOMAIN/test_keymaster.txt"
 echo ""
