@@ -3,7 +3,7 @@
 
 # === ВЕРСИЯ СКРИПТА ===
 SCRIPT_VERSION="v1.4"
-SCRIPT_NAME="KeyMaster Docker Setup"
+SCRIPT_NAME="KeyMaster Server"
 
 # === МЕТКА УСТАНОВКИ ===
 MARKER_FILE="/etc/keymaster-server-setup.marker"
