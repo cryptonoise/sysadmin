@@ -1,61 +1,30 @@
 #!/bin/bash
 # Запуск: curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/server4keymaster.sh | bash
-
 # === ВЕРСИЯ СКРИПТА ===
-SCRIPT_VERSION="v1.6"
-SCRIPT_NAME="KeyMaster Server"
-
+SCRIPT_VERSION="v2.0-UniSSL"
+SCRIPT_NAME="KeyMaster Server (Universal SSL)"
 # === МЕТКА УСТАНОВКИ ===
 MARKER_FILE="/etc/keymaster-server-setup.marker"
 DOCKER_DIR="/opt/keymaster-docker"
 UPLOAD_DIR_HOST="/var/www/keymaster-media"
-
+CERTBOT_WEBROOT="/var/www/certbot"
 set -e
 
-# Цвета для вывода
+# Цвета
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
-MAGENTA='\033[0;35m'
 NC='\033[0m'
 
 log_info()    { echo -e "${BLUE}[ℹ️]${NC} $1"; }
 log_success() { echo -e "${GREEN}[✅]${NC} $1"; }
 log_warn()    { echo -e "${YELLOW}[⚠️]${NC} $1"; }
 log_error()   { echo -e "${RED}[❌]${NC} $1"; }
-log_step()    { echo -e "\n${CYAN}────────────────────────────────${NC}"; echo -e "${CYAN}[ ⚙️ ]${NC} $1"; echo -e "${CYAN}────────────────────────────────${NC}\n"; }
+log_step()    { echo -e "\n${CYAN}────────────────────────────────${NC}\n${CYAN}[ ⚙️ ]${NC} $1\n${CYAN}────────────────────────────────${NC}\n"; }
 log_detail()  { echo -e "   ${CYAN}→${NC} $1"; }
 
-# === Cloudflare IP ranges ===
-CLOUDFLARE_IPS='
-    set_real_ip_from 103.21.244.0/22;
-    set_real_ip_from 103.22.200.0/22;
-    set_real_ip_from 103.31.4.0/22;
-    set_real_ip_from 104.16.0.0/13;
-    set_real_ip_from 104.24.0.0/14;
-    set_real_ip_from 108.162.192.0/18;
-    set_real_ip_from 131.0.72.0/22;
-    set_real_ip_from 141.101.64.0/18;
-    set_real_ip_from 162.158.0.0/15;
-    set_real_ip_from 172.64.0.0/13;
-    set_real_ip_from 173.245.48.0/20;
-    set_real_ip_from 188.114.96.0/20;
-    set_real_ip_from 190.93.240.0/20;
-    set_real_ip_from 197.234.240.0/22;
-    set_real_ip_from 198.41.128.0/17;
-    set_real_ip_from 2400:cb00::/32;
-    set_real_ip_from 2606:4700::/32;
-    set_real_ip_from 2803:f800::/32;
-    set_real_ip_from 2405:b500::/32;
-    set_real_ip_from 2405:8100::/32;
-    set_real_ip_from 2a06:98c0::/29;
-    set_real_ip_from 2c0f:f248::/32;
-    set_real_ip_recursive on;
-    real_ip_header CF-Connecting-IP;'
-
-# === ЗАГОЛОВОК ===
 print_header() {
     echo ""
     echo -e "${RED}────────────────────────────────${NC}"
@@ -64,317 +33,322 @@ print_header() {
     echo -e "${RED}────────────────────────────────${NC}"
     echo ""
 }
+
 print_header
 
 # Проверка root
 if [[ $EUID -ne 0 ]]; then
-   log_error "Скрипт должен быть запущен от имени root"
-   exit 1
+    log_error "Запустите от имени root"
+    exit 1
 fi
 
 # === ПРОВЕРКА МЕТКИ ===
 if [[ -f "$MARKER_FILE" ]]; then
-    log_warn "Обнаружена метка предыдущей установки"
-    echo "📋 Скрипт уже запускался на этом сервере."
+    log_warn "Найдена метка предыдущей установки"
+    echo "📋 Скрипт уже запускался."
     echo "   Домен: $(grep '^DOMAIN=' "$MARKER_FILE" | cut -d'=' -f2)"
-    echo "   Пользователь: $(grep '^USER=' "$MARKER_FILE" | cut -d'=' -f2)"
     echo ""
-    echo -e "${YELLOW}Выберите действие:${NC}"
-    echo "   1 - Продолжить настройку (пересоздать контейнер)"
-    echo "   2 - 🗑️  ОТКАТИТЬ все изменения (удалить контейнер и конфиги)"
-    echo "   3 - Выйти"
-    read -p "Введите номер [1-3]: " ACTION_CHOICE < /dev/tty
+    echo -e "${YELLOW}Действие:${NC}"
+    echo "   1 - Пересоздать контейнер"
+    echo "   2 - 🗑️  Полный откат (удалить всё)"
+    echo "   3 - Выход"
+    read -p "Выбор [1-3]: " ACTION_CHOICE < /dev/tty
+    
     case $ACTION_CHOICE in
         2)
             log_step "🗑️  Откат"
-            PREV_USER=$(grep '^USER=' "$MARKER_FILE" | cut -d'=' -f2)
-            PREV_DOMAIN=$(grep '^DOMAIN=' "$MARKER_FILE" | cut -d'=' -f2)
-            PREV_UPLOAD_DIR=$(grep '^UPLOAD_DIR=' "$MARKER_FILE" | cut -d'=' -f2)
-            PREV_SSH_PORT=$(grep '^SSH_PORT=' "$MARKER_FILE" | cut -d'=' -f2)
-            PREV_SSH_PORT=${PREV_SSH_PORT:-6934}
-            
             if command -v docker &>/dev/null; then
                 cd "$DOCKER_DIR" 2>/dev/null && docker compose down 2>/dev/null || true
                 docker rm -f keymaster 2>/dev/null || true
-                log_detail "Контейнер keymaster удален"
             fi
-            if [[ -d "$DOCKER_DIR" ]]; then
-                log_detail "Удаление директории $DOCKER_DIR"
-                rm -rf "$DOCKER_DIR"
+            [[ -d "$DOCKER_DIR" ]] && rm -rf "$DOCKER_DIR"
+            [[ -d "$UPLOAD_DIR_HOST" ]] && rm -rf "$UPLOAD_DIR_HOST"
+            [[ -d "$CERTBOT_WEBROOT" ]] && rm -rf "$CERTBOT_WEBROOT"
+            
+            # Удаляем блок webroot из основного nginx если есть
+            if command -v nginx &>/dev/null; then
+                sed -i '/location \/\.well-known\/acme-challenge/d' /etc/nginx/sites-available/*.conf 2>/dev/null || true
+                sed -i '/root \/var\/www\/certbot;/d' /etc/nginx/sites-available/*.conf 2>/dev/null || true
+                nginx -t && systemctl reload nginx 2>/dev/null || true
             fi
-            [[ -n "$PREV_USER" ]] && id "$PREV_USER" &>/dev/null && { log_detail "Удаление пользователя: $PREV_USER"; userdel -r "$PREV_USER" 2>/dev/null || true; }
-            [[ -n "$PREV_UPLOAD_DIR" ]] && [[ -d "$PREV_UPLOAD_DIR" ]] && { log_detail "Удаление папки: $PREV_UPLOAD_DIR"; rm -rf "$PREV_UPLOAD_DIR"; }
-            SSH_CONFIG="/etc/ssh/sshd_config"
-            grep -q "^Port $PREV_SSH_PORT" "$SSH_CONFIG" 2>/dev/null && { sed -i "/^Port $PREV_SSH_PORT/d" "$SSH_CONFIG"; systemctl restart sshd 2>/dev/null || true; }
-            command -v ufw &>/dev/null && { ufw delete allow $PREV_SSH_PORT/tcp 2>/dev/null; ufw delete allow 80/tcp 2>/dev/null; } || true
+            
             rm -f "$MARKER_FILE"
-            echo -e "${GREEN}✅ Откат завершён${NC}"; exit 0
+            log_success "Откат выполнен"; exit 0
             ;;
         3) exit 0 ;;
-        1) log_info "Продолжение настройки" ;;
+        1) log_info "Продолжаем..." ;;
         *) log_error "Неверный выбор"; exit 1 ;;
     esac
 fi
 
-[[ ! -f /etc/os-release ]] && { log_error "Не удалось определить ОС"; exit 1; }
+[[ ! -f /etc/os-release ]] && { log_error "Неизвестная ОС"; exit 1; }
 source /etc/os-release
 OS_ID=$ID
 log_info "ОС: $PRETTY_NAME"
 
 # === ШАГ 1: Домен ===
-log_step "Шаг 1: Настройка домена"
+log_step "Шаг 1: Домен"
 while true; do
-    read -p "🌐 Введите домен: " MEDIA_DOMAIN < /dev/tty
+    read -p "🌐 Домен (например, media.norest.art): " MEDIA_DOMAIN < /dev/tty
     MEDIA_DOMAIN=$(echo "$MEDIA_DOMAIN" | xargs | sed 's|https\?://||' | sed 's|/$||')
-    [[ -z "$MEDIA_DOMAIN" ]] && { log_error "Домен не может быть пустым"; continue; }
-    [[ ! "$MEDIA_DOMAIN" =~ \. ]] && { log_error "Домен должен содержать точку"; continue; }
-    [[ ! "$MEDIA_DOMAIN" =~ ^[a-zA-Z0-9.-]+$ ]] && { log_error "Недопустимые символы"; continue; }
+    [[ -z "$MEDIA_DOMAIN" ]] && { log_error "Пусто"; continue; }
+    [[ ! "$MEDIA_DOMAIN" =~ \. ]] && { log_error "Нужна точка"; continue; }
     break
 done
 log_success "Домен: $MEDIA_DOMAIN"
 
-# === ШАГ 2-4: Пользователь, ключ, порт ===
+# === ШАГ 2: Пользователь ===
 log_step "Шаг 2: Пользователь"
-read -p "👤 Имя пользователя [по-умолчанию keymaster]: " UPLOAD_USER < /dev/tty
+read -p "👤 Имя пользователя [keymaster]: " UPLOAD_USER < /dev/tty
 UPLOAD_USER=${UPLOAD_USER:-keymaster}
-[[ -z "$UPLOAD_USER" ]] && { log_error "Имя не может быть пустым"; exit 1; }
-log_success "Пользователь: $UPLOAD_USER"
+if id "$UPLOAD_USER" &>/dev/null; then
+    log_detail "Пользователь существует"
+else
+    useradd -m -s /bin/bash "$UPLOAD_USER"
+    log_success "Пользователь создан"
+fi
 
-log_step "Шаг 3: SSH-ключ"
-echo "🔑 Введите публичный SSH-ключ:"
-read -r SSH_PUBLIC_KEY < /dev/tty
-[[ -z "$SSH_PUBLIC_KEY" ]] && { log_error "Ключ не может быть пустым"; exit 1; }
-log_success "Ключ принят"
-
-log_step "Шаг 4: SSH-порт"
-read -p "🔌 Порт [по-умолчанию 6934]: " SSH_PORT < /dev/tty
-SSH_PORT=${SSH_PORT:-6934}
-[[ ! "$SSH_PORT" =~ ^[0-9]+$ || "$SSH_PORT" -lt 1 || "$SSH_PORT" -gt 65535 ]] && { log_error "Неверный порт"; exit 1; }
-[[ "$SSH_PORT" == "22" ]] && log_warn "Порт 22 — стандартный"
-log_success "Порт: $SSH_PORT"
-
-# === ШАГ 5: Установка Docker ===
-log_step "Шаг 5: Проверка и установка Docker"
-
-install_docker() {
-    log_detail "Установка зависимостей..."
+# === ШАГ 3: Docker и Certbot ===
+log_step "Шаг 3: Установка Docker и Certbot"
+install_deps() {
     case $OS_ID in
         ubuntu|debian)
             apt-get update
-            apt-get install -y ca-certificates curl gnupg lsb-release
+            apt-get install -y ca-certificates curl gnupg lsb-release software-properties-common
             mkdir -p /etc/apt/keyrings
-            curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg 2>/dev/null || \
-            curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+            curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg 2>/dev/null || true
             echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/$OS_ID $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
             apt-get update
-            apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+            apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin certbot python3-certbot-nginx
             ;;
         centos|rhel|fedora|almalinux|rocky)
-            yum install -y yum-utils
+            yum install -y yum-utils epel-release
             yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-            yum install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
+            yum install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin certbot python3-certbot-nginx
             systemctl enable --now docker
             ;;
-        *) log_error "Неизвестная ОС для автоустановки Docker: $OS_ID"; exit 1 ;;
+        *) log_error "ОС не поддерживается"; exit 1 ;;
     esac
 }
 
-if command -v docker &>/dev/null; then
-    log_success "Docker уже установлен: $(docker --version)"
-else
-    log_warn "Docker не найден. Начинается установка..."
-    install_docker
-    log_success "Docker установлен"
-fi
+command -v docker &>/dev/null || { log_warn "Ставим Docker..."; install_deps; }
+command -v certbot &>/dev/null || { log_warn "Ставим Certbot..."; install_deps; }
 
 if ! docker compose version &>/dev/null; then
-    log_error "Docker установлен, но плагин compose не найден."
-    exit 1
+    log_error "Нет docker-compose"; exit 1
 fi
 
-# === ШАГ 6: Пользователь на хосте ===
-log_step "Шаг 6: Создание пользователя на хосте"
-if id "$UPLOAD_USER" &>/dev/null; then
-    log_detail "Пользователь $UPLOAD_USER уже существует"
+# === ШАГ 4: Получение SSL Сертификата ===
+log_step "Шаг 4: SSL Сертификат"
+
+# Создаем папку для webroot
+mkdir -p "$CERTBOT_WEBROOT"
+
+if [[ -d "/etc/letsencrypt/live/$MEDIA_DOMAIN" ]]; then
+    log_info "Сертификат уже есть. Пропускаем."
 else
-    log_detail "Выполнение: useradd -m -s /bin/bash $UPLOAD_USER"
-    useradd -m -s /bin/bash "$UPLOAD_USER"
-    log_success "Пользователь $UPLOAD_USER создан"
+    if command -v nginx &>/dev/null; then
+        # --- СЦЕНАРИЙ А: NGINX ЕСТЬ (Webroot) ---
+        log_info "Обнаружен системный Nginx. Используем метод Webroot."
+        
+        # Добавляем временный блок в основной nginx, чтобы certbot мог положить файл
+        # Ищем основной конфиг или создаем общий сниппет
+        # Для простоты добавим в sites-enabled/default или создадим новый conf
+        
+        # Проверяем, есть ли уже такой location в каком-то активном сайте
+        if ! grep -r "acme-challenge" /etc/nginx/sites-enabled/ 2>/dev/null | grep -q "."; then
+            log_detail "Добавляем поддержку .well-known в основной Nginx..."
+            
+            # Создаем общий конфиг для certbot, который подключается ко всем серверам
+            cat > /etc/nginx/conf.d/certbot-webroot.conf <<'EOF'
+location /.well-known/acme-challenge/ {
+    root /var/www/certbot;
+}
+EOF
+            nginx -t && systemctl reload nginx
+        fi
+
+        log_detail "Запрос сертификата через Webroot..."
+        certbot certonly --webroot -w "$CERTBOT_WEBROOT" -d "$MEDIA_DOMAIN" --non-interactive --agree-tos -m admin@"$MEDIA_DOMAIN" --keep-until-expiring --expand
+
+        if [[ $? -ne 0 ]]; then
+            log_error "Ошибка получения сертификата. Проверьте DNS A-запись для $MEDIA_DOMAIN"
+            exit 1
+        fi
+        
+        # Очищаем временный конфиг, так как сертификат получен
+        rm -f /etc/nginx/conf.d/certbot-webroot.conf
+        nginx -t && systemctl reload nginx
+        log_success "Сертификат получен (Webroot)"
+
+    else
+        # --- СЦЕНАРИЙ Б: NGINX НЕТ (Standalone/Temp Nginx) ---
+        log_info "Системный Nginx не найден. Устанавливаем временный Nginx для проверки."
+        
+        # Ставим nginx если нет (зависимость certbot-nginx может поставить его)
+        if ! command -v nginx &>/dev/null; then
+             case $OS_ID in
+                ubuntu|debian) apt-get install -y nginx ;;
+                centos|rhel*) yum install -y nginx ;;
+             esac
+        fi
+
+        log_detail "Создаем временный конфиг на порту 80..."
+        cat > /etc/nginx/sites-available/keymaster-temp.conf <<EOF
+server {
+    listen 80;
+    server_name $MEDIA_DOMAIN;
+    location / {
+        return 200 'OK';
+        add_header Content-Type text/plain;
+    }
+}
+EOF
+        ln -sf /etc/nginx/sites-available/keymaster-temp.conf /etc/nginx/sites-enabled/
+        nginx -t && systemctl restart nginx
+
+        log_detail "Запрос сертификата через Nginx plugin..."
+        certbot certonly --nginx -d "$MEDIA_DOMAIN" --non-interactive --agree-tos -m admin@"$MEDIA_DOMAIN" --keep-until-expiring --expand
+
+        if [[ $? -ne 0 ]]; then
+            log_error "Ошибка получения сертификата."
+            rm -f /etc/nginx/sites-enabled/keymaster-temp.conf
+            rm -f /etc/nginx/sites-available/keymaster-temp.conf
+            exit 1
+        fi
+
+        log_detail "Удаляем временный конфиг..."
+        rm -f /etc/nginx/sites-enabled/keymaster-temp.conf
+        rm -f /etc/nginx/sites-available/keymaster-temp.conf
+        nginx -t && systemctl restart nginx
+        log_success "Сертификат получен (Temp Nginx)"
+    fi
 fi
 
-# === ШАГ 7: SSH на хосте ===
-log_step "Шаг 7: Настройка SSH на хосте"
-SSH_DIR="/home/$UPLOAD_USER/.ssh"
-log_detail "Создание директории: $SSH_DIR"
-mkdir -p "$SSH_DIR"
-log_detail "Запись ключа в: $SSH_DIR/authorized_keys"
-echo "$SSH_PUBLIC_KEY" > "$SSH_DIR/authorized_keys"
-chmod 700 "$SSH_DIR"
-chmod 600 "$SSH_DIR/authorized_keys"
-chown -R "$UPLOAD_USER:$UPLOAD_USER" "$SSH_DIR"
-log_success "SSH-ключ настроен"
-
-SSH_CONFIG="/etc/ssh/sshd_config"
-if ! grep -q "^Port $SSH_PORT" "$SSH_CONFIG" 2>/dev/null; then
-    log_detail "Добавление порта $SSH_PORT в $SSH_CONFIG"
-    sed -i "/^#Port 22/a Port $SSH_PORT" "$SSH_CONFIG" 2>/dev/null || echo "Port $SSH_PORT" >> "$SSH_CONFIG"
-    log_success "Порт $SSH_PORT добавлен"
-else
-    log_warn "Порт $SSH_PORT уже в конфигурации"
-fi
-log_detail "Перезапуск SSH-сервиса"
-systemctl restart sshd 2>/dev/null || systemctl restart ssh 2>/dev/null || true
-log_success "SSH перезапущен"
-
-# === ШАГ 8: Подготовка папок ===
-log_step "Шаг 8: Подготовка структуры папок"
-
+# === ШАГ 5: Подготовка папок ===
+log_step "Шаг 5: Папки"
 NGINX_CONF_DIR="$DOCKER_DIR/nginx"
+mkdir -p "$UPLOAD_DIR_HOST" "$NGINX_CONF_DIR" "$DOCKER_DIR"
 
-log_detail "Создание директорий..."
-mkdir -p "$UPLOAD_DIR_HOST"
-mkdir -p "$NGINX_CONF_DIR"
-mkdir -p "$DOCKER_DIR"
-
-# Права: пользователь + www-data (uid 33) для контейнера
 chown -R "$UPLOAD_USER:33" "$UPLOAD_DIR_HOST"
 chmod 775 "$UPLOAD_DIR_HOST"
-
-# ACL для надёжного совместного доступа
-command -v setfacl &>/dev/null && {
-    setfacl -d -m u::rwx,g::rx,o::rx "$UPLOAD_DIR_HOST" 2>/dev/null || true
-    setfacl -m u::rwx,g::rx,o::rx "$UPLOAD_DIR_HOST" 2>/dev/null || true
-    log_detail "ACL настроены"
-} || log_detail "setfacl не доступен, используем стандартные права"
-
-# Индекс-файл
-echo "KeyMaster Media Server" > "$UPLOAD_DIR_HOST/index.html"
+echo "<h1>KeyMaster HTTPS Ready</h1>" > "$UPLOAD_DIR_HOST/index.html"
 chown "$UPLOAD_USER:33" "$UPLOAD_DIR_HOST/index.html"
-chmod 644 "$UPLOAD_DIR_HOST/index.html"
 
-log_success "Структура создана:"
-log_detail "  • Загрузки: $UPLOAD_DIR_HOST"
-log_detail "  • Конфиги:  $NGINX_CONF_DIR"
-log_detail "  • Docker:   $DOCKER_DIR"
+# === ШАГ 6: Проверка порта 8081 ===
+log_step "Шаг 6: Проверка порта 8081"
+PORT_TO_USE=8081
+if ss -tlnp | grep ":$PORT_TO_USE " &>/dev/null; then
+    log_error "Порт $PORT_TO_USE занят!"
+    log_detail "Кто занял:"
+    ss -tlnp | grep ":$PORT_TO_USE "
+    log_error "Освободите порт или измените переменную PORT_TO_USE в скрипте."
+    exit 1
+else
+    log_success "Порт $PORT_TO_USE свободен"
+fi
 
-# === ШАГ 9: Генерация Nginx конфига (ОПТИМИЗИРОВАН) ===
-log_step "Шаг 9: Генерация конфигурации Nginx"
-
+# === ШАГ 7: Конфиг Nginx (Внутри Docker) ===
+log_step "Шаг 7: Конфиг Nginx (Docker)"
 NGINX_CONF_FILE="$NGINX_CONF_DIR/default.conf"
 
 cat > "$NGINX_CONF_FILE" << 'NGINX_EOF'
-# === ОПТИМИЗАЦИЯ ДЛЯ OPENAI ===
 proxy_read_timeout 300s;
 proxy_send_timeout 300s;
 send_timeout 300s;
 
-# Cloudflare: реальный IP
-CLOUDFLARE_IPS
+# Cloudflare IPs
+set_real_ip_from 103.21.244.0/22;
+set_real_ip_from 103.22.200.0/22;
+set_real_ip_from 103.31.4.0/22;
+set_real_ip_from 104.16.0.0/13;
+set_real_ip_from 104.24.0.0/14;
+set_real_ip_from 108.162.192.0/18;
+set_real_ip_from 131.0.72.0/22;
+set_real_ip_from 141.101.64.0/18;
+set_real_ip_from 162.158.0.0/15;
+set_real_ip_from 172.64.0.0/13;
+set_real_ip_from 173.245.48.0/20;
+set_real_ip_from 188.114.96.0/20;
+set_real_ip_from 190.93.240.0/20;
+set_real_ip_from 197.234.240.0/22;
+set_real_ip_from 198.41.128.0/17;
+set_real_ip_recursive on;
+real_ip_header CF-Connecting-IP;
 
-# === TCP ОПТИМИЗАЦИИ ===
 sendfile on;
 tcp_nopush on;
 tcp_nodelay on;
 keepalive_timeout 65;
-keepalive_requests 100;
 
-# === СЖАТИЕ (только текст) ===
 gzip on;
 gzip_vary on;
 gzip_proxied any;
 gzip_comp_level 6;
-gzip_min_length 256;
-gzip_types text/plain text/css text/xml application/json application/javascript application/rss+xml application/atom+xml image/svg+xml;
+gzip_types text/plain text/css application/json application/javascript;
 
+# HTTP Redirect
 server {
     listen 80;
-    listen [::]:80;
-    
+    server_name MEDIA_DOMAIN_PLACEHOLDER www.MEDIA_DOMAIN_PLACEHOLDER;
+    return 301 https://$host$request_uri;
+}
+
+# HTTPS Server
+server {
+    listen 443 ssl http2;
     server_name MEDIA_DOMAIN_PLACEHOLDER www.MEDIA_DOMAIN_PLACEHOLDER;
     
+    ssl_certificate /etc/letsencrypt/live/MEDIA_DOMAIN_PLACEHOLDER/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/MEDIA_DOMAIN_PLACEHOLDER/privkey.pem;
+    
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+
     root /usr/share/nginx/html;
     index index.html;
-    
-    server_tokens off;
     client_max_body_size 100M;
-    
-    # === КЭШИРОВАНИЕ МЕДИА ===
-    location ~* \.(jpg|jpeg|png|gif|webp|mp4|mov|avi|mkv|wmv)$ {
+
+    location ~* \.(jpg|jpeg|png|gif|webp|mp4|mov|avi|mkv)$ {
         expires 1y;
         add_header Cache-Control "public, immutable";
         add_header Access-Control-Allow-Origin * always;
-        access_log off;
     }
-    
-    # CORS для OpenAI
+
     add_header Access-Control-Allow-Origin * always;
-    add_header Access-Control-Allow-Methods 'GET, OPTIONS' always;
-    add_header Access-Control-Allow-Headers 'Content-Type, Accept, Authorization' always;
-    
+    add_header X-Content-Type-Options nosniff always;
+
     location / {
         try_files $uri $uri/ =404;
-        autoindex off;
-        
-        types {
-            image/jpeg jpg jpeg;
-            image/png png;
-            image/webp webp;
-            image/gif gif;
-            video/mp4 mp4;
-            video/quicktime mov;
-            video/x-msvideo avi;
-            video/x-matroska mkv;
-            video/x-ms-wmv wmv;
-            application/octet-stream bin;
-        }
-        default_type application/octet-stream;
-        
-        add_header X-Content-Type-Options nosniff always;
     }
-    
-    location ~ /\. {
-        deny all;
-        return 404;
-    }
-    
-    access_log /var/log/nginx/access.log;
-    error_log /var/log/nginx/error.log warn;
 }
 NGINX_EOF
 
-# Подстановка домена в конфиг
 sed -i "s/MEDIA_DOMAIN_PLACEHOLDER/$MEDIA_DOMAIN/g" "$NGINX_CONF_FILE"
+log_success "Конфиг создан"
 
-log_success "Конфиг nginx создан"
-
-# === ШАГ 10: Docker Compose ===
-log_step "Шаг 10: Создание docker-compose.yml"
-
+# === ШАГ 8: Docker Compose ===
+log_step "Шаг 8: Docker Compose"
 COMPOSE_FILE="$DOCKER_DIR/docker-compose.yml"
 
 cat > "$COMPOSE_FILE" << EOF
 version: '3.8'
-
 services:
   keymaster:
     image: nginx:alpine
     container_name: keymaster
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "$PORT_TO_USE:80"
+      - "443:443"
     volumes:
       - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
       - ${UPLOAD_DIR_HOST}:/usr/share/nginx/html:rw
-    sysctls:
-      - net.core.somaxconn=1024
+      - /etc/letsencrypt:/etc/letsencrypt:ro
     networks:
       - web-net
-    healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost/test_keymaster.txt"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 10s
 
 networks:
   web-net:
@@ -383,96 +357,45 @@ EOF
 
 log_success "docker-compose.yml создан"
 
-# === ШАГ 11: Запуск контейнера ===
-log_step "Шаг 11: Запуск контейнера keymaster"
+# === ШАГ 9: Запуск ===
+log_step "Шаг 9: Запуск"
 cd "$DOCKER_DIR"
 docker compose up -d
 sleep 3
-log_success "Контейнер запущен"
-log_detail "Статус: $(docker ps --filter name=keymaster --format '{{.Status}}')"
 
-# === ШАГ 12: Проверка доступности ===
-log_step "Шаг 12: Проверка доступности медиа"
-if docker exec keymaster test -r /usr/share/nginx/html/test_keymaster.txt 2>/dev/null; then
-    log_success "✅ Файл доступен внутри контейнера"
+if docker ps --filter name=keymaster --format '{{.Status}}' | grep -q "Up"; then
+    log_success "Контейнер запущен"
 else
-    log_warn "⚠️ Файл не читается внутри контейнера"
+    log_error "Ошибка запуска. Логи: docker logs keymaster"
+    exit 1
 fi
 
-if command -v curl &>/dev/null; then
-    HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1/test_keymaster.txt" 2>/dev/null || echo "000")
-    if [[ "$HTTP_CODE" == "200" ]]; then
-        log_success "✅ Файл доступен по HTTP (код: $HTTP_CODE)"
-    else
-        log_warn "⚠️ HTTP-проверка вернула код: $HTTP_CODE"
-    fi
-fi
-
-# === ШАГ 13: Фаервол ===
-log_step "Шаг 13: Настройка фаервола"
-if command -v ufw &>/dev/null; then
-    log_detail "UFW: разрешаем порты"
-    ufw allow 22/tcp 2>/dev/null || true
-    ufw allow $SSH_PORT/tcp 2>/dev/null || true
-    ufw allow 80/tcp 2>/dev/null || true
-    echo "y" | ufw enable 2>/dev/null || true
-    log_success "✅ Правила UFW применены"
-elif command -v firewall-cmd &>/dev/null; then
-    firewall-cmd --permanent --add-service=ssh 2>/dev/null || true
-    firewall-cmd --permanent --add-port=$SSH_PORT/tcp 2>/dev/null || true
-    firewall-cmd --permanent --add-service=http 2>/dev/null || true
-    firewall-cmd --reload 2>/dev/null || true
-    log_success "✅ Правила firewalld применены"
-else
-    log_warn "Фаервол не обнаружен — откройте порты 22, $SSH_PORT, 80 вручную"
-fi
-
-# === ШАГ 14: Тестовый файл ===
-log_step "Шаг 14: Создание тестового файла"
+# === ШАГ 10: Тест ===
+log_step "Шаг 10: Тест"
 TEST_FILE="$UPLOAD_DIR_HOST/test_keymaster.txt"
-echo "KeyMaster server is ready! $(date)" > "$TEST_FILE"
-chown "$UPLOAD_USER:33" "$TEST_FILE" 2>/dev/null || true
-chmod 664 "$TEST_FILE"
-log_success "✅ Файл создан: $TEST_FILE"
+echo "KeyMaster HTTPS OK! $(date)" > "$TEST_FILE"
+chown "$UPLOAD_USER:33" "$TEST_FILE"
 
-# === ШАГ 15: Метка ===
-log_step "Шаг 15: Метка установки"
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -k "https://127.0.0.1/test_keymaster.txt" 2>/dev/null || echo "000")
+if [[ "$HTTP_CODE" == "200" ]]; then
+    log_success "HTTPS работает (Код: $HTTP_CODE)"
+else
+    log_warn "HTTPS код: $HTTP_CODE"
+fi
+
+# === ШАГ 11: Метка ===
 cat > "$MARKER_FILE" << EOF
 INSTALLED_AT=$(date '+%Y-%m-%d %H:%M:%S')
 SCRIPT_VERSION=$SCRIPT_VERSION
 DOMAIN=$MEDIA_DOMAIN
 USER=$UPLOAD_USER
 UPLOAD_DIR=$UPLOAD_DIR_HOST
-SSH_PORT=$SSH_PORT
 DOCKER_DIR=$DOCKER_DIR
+EXTERNAL_PORT=$PORT_TO_USE
 EOF
 chmod 644 "$MARKER_FILE"
-log_success "✅ Метка создана"
- 
-# === ШАГ 16: Итог ===
-log_step "✅ Настройка завершена!"
-echo -e "${RED}────────────────────────────────${NC}"
-echo "🎉 Сервер KeyMaster готов к работе!"
-echo -e "${RED}────────────────────────────────${NC}"
-echo ""
-echo "📋 Параметры:"
-echo "   • Домен:            $MEDIA_DOMAIN"
-echo "   • Пользователь:     $UPLOAD_USER"
-echo "   • SSH порт:         $SSH_PORT"
-echo "   • Папка загрузок:   $UPLOAD_DIR_HOST"
-echo "   • Контейнер:        keymaster"
-echo ""
-echo "🛠 Управление:"
-echo "   • Логи:             docker logs -f keymaster"
-echo "   • Перезагрузка:     cd $DOCKER_DIR && docker compose restart"
-echo "   • Остановка:        cd $DOCKER_DIR && docker compose down"
-echo ""
-echo -e "${YELLOW}⚠️  Cloudflare:${NC}"
-echo "   • Если используете прокси (оранжевое облачко):"
-echo "     - DNS → media → Edit → Proxy status: OFF (серое)"
-echo "     - Или WAF правило: Allow 'OpenAI' в User-Agent"
-echo "   • SSL/TLS → Full (strict)"
-echo ""
-echo "🧪 Проверка:"
-echo -e "   🔗 http://$MEDIA_DOMAIN/test_keymaster.txt"
-echo ""
+
+# === ИТОГ ===
+log_step "✅ Готово!"
+echo "🔗 https://$MEDIA_DOMAIN/test_keymaster.txt"
+echo "⚠️ Cloudflare: A-запись $MEDIA_DOMAIN -> IP, Proxy OFF (серое), SSL Full Strict"
