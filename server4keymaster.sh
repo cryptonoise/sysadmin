@@ -1,8 +1,8 @@
 #!/bin/bash
-# Запуск: curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/install-keymaster-native.sh | bash
-SCRIPT_VERSION="v1.0-Native-SSL"
-SCRIPT_NAME="KeyMaster Native Installer"
-MARKER_FILE="/etc/keymaster-native-setup.marker"
+# Запуск: curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/install-keymaster-native-sftp.sh | bash
+SCRIPT_VERSION="v2.0-Native-SFTP"
+SCRIPT_NAME="KeyMaster Native + SFTP"
+MARKER_FILE="/etc/keymaster-native-sftp.marker"
 UPLOAD_DIR="/var/www/keymaster-media"
 TEMP_CONF="/etc/nginx/sites-available/keymaster-temp"
 MAIN_CONF="/etc/nginx/sites-available/keymaster"
@@ -42,11 +42,14 @@ fi
 if [[ -f "$MARKER_FILE" ]]; then
     log_warn "Найдена метка предыдущей установки"
     PREV_DOMAIN=$(grep '^DOMAIN=' "$MARKER_FILE" | cut -d'=' -f2)
-    echo "📋 Скрипт уже запускался для домена: $PREV_DOMAIN"
+    PREV_USER=$(grep '^USER=' "$MARKER_FILE" | cut -d'=' -f2)
+    echo "📋 Скрипт уже запускался."
+    echo "   Домен: $PREV_DOMAIN"
+    echo "   Пользователь SFTP: $PREV_USER"
     echo ""
     echo -e "${YELLOW}Действие:${NC}"
     echo "   1 - Пересоздать конфиги (обновить SSL/настройки)"
-    echo "   2 - 🗑️  Полный откат (удалить сайт и сертификаты)"
+    echo "   2 - 🗑️  Полный откат (удалить сайт, юзера, сертификаты)"
     echo "   3 - Выход"
     read -p "Выбор [1-3]: " ACTION_CHOICE < /dev/tty
     
@@ -60,12 +63,16 @@ if [[ -f "$MARKER_FILE" ]]; then
             # Удаляем папку файлов
             [[ -d "$UPLOAD_DIR" ]] && rm -rf "$UPLOAD_DIR"
             
-            # Удаляем сертификат (опционально, можно оставить)
+            # Удаляем пользователя
+            if [[ -n "$PREV_USER" ]] && id "$PREV_USER" &>/dev/null; then
+                log_detail "Удаление пользователя: $PREV_USER"
+                userdel -r "$PREV_USER" 2>/dev/null || true
+            fi
+            
+            # Удаляем сертификат
             if [[ -d "/etc/letsencrypt/live/$PREV_DOMAIN" ]]; then
-                read -p "Удалить SSL сертификат для $PREV_DOMAIN? [y/N]: " DEL_CERT < /dev/tty
-                if [[ "$DEL_CERT" =~ ^[Yy]$ ]]; then
-                    certbot delete --cert-name "$PREV_DOMAIN" --non-interactive || true
-                fi
+                log_detail "Удаление сертификата: $PREV_DOMAIN"
+                certbot delete --cert-name "$PREV_DOMAIN" --non-interactive || true
             fi
             
             nginx -t && systemctl reload nginx 2>/dev/null || true
@@ -94,8 +101,43 @@ while true; do
 done
 log_success "Домен: $MEDIA_DOMAIN"
 
-# === ШАГ 2: Установка Nginx и Certbot ===
-log_step "Шаг 2: Проверка Nginx и Certbot"
+# === ШАГ 2: Пользователь SFTP ===
+log_step "Шаг 2: Пользователь для SFTP"
+read -p "👤 Имя пользователя для загрузки файлов [keymaster]: " SFTP_USER < /dev/tty
+SFTP_USER=${SFTP_USER:-keymaster}
+[[ -z "$SFTP_USER" ]] && { log_error "Имя не может быть пустым"; exit 1; }
+
+if id "$SFTP_USER" &>/dev/null; then
+    log_warn "Пользователь $SFTP_USER уже существует. Мы обновим его SSH ключ."
+else
+    log_detail "Создание пользователя: $SFTP_USER"
+    useradd -m -s /bin/bash "$SFTP_USER"
+    log_success "Пользователь создан"
+fi
+
+# === ШАГ 3: SSH Ключ ===
+log_step "Шаг 3: SSH Публичный Ключ"
+echo "🔑 Вставьте публичный SSH ключ (содержимое id_rsa.pub):"
+echo "   (Нажмите Enter после вставки)"
+read -r SSH_PUBLIC_KEY < /dev/tty
+
+if [[ -z "$SSH_PUBLIC_KEY" ]]; then
+    log_error "Ключ не может быть пустым"
+    exit 1
+fi
+
+# Настройка .ssh директории
+SSH_DIR="/home/$SFTP_USER/.ssh"
+mkdir -p "$SSH_DIR"
+echo "$SSH_PUBLIC_KEY" > "$SSH_DIR/authorized_keys"
+chmod 700 "$SSH_DIR"
+chmod 600 "$SSH_DIR/authorized_keys"
+chown -R "$SFTP_USER:$SFTP_USER" "$SSH_DIR"
+log_success "SSH ключ установлен для пользователя $SFTP_USER"
+log_info "Теперь вы можете подключаться по SFTP: sftp $SFTP_USER@YOUR_SERVER_IP"
+
+# === ШАГ 4: Установка Nginx и Certbot ===
+log_step "Шаг 4: Проверка Nginx и Certbot"
 install_deps() {
     case $OS_ID in
         ubuntu|debian)
@@ -116,7 +158,7 @@ if ! command -v nginx &>/dev/null; then
     install_deps
     log_success "Nginx установлен"
 else
-    log_success "Nginx уже установлен: $(nginx -v 2>&1)"
+    log_success "Nginx уже установлен"
 fi
 
 if ! command -v certbot &>/dev/null; then
@@ -125,8 +167,8 @@ if ! command -v certbot &>/dev/null; then
     log_success "Certbot установлен"
 fi
 
-# === ШАГ 3: Получение SSL Сертификата ===
-log_step "Шаг 3: SSL Сертификат"
+# === ШАГ 5: Получение SSL Сертификата ===
+log_step "Шаг 5: SSL Сертификат"
 
 if [[ -d "/etc/letsencrypt/live/$MEDIA_DOMAIN" ]]; then
     log_info "Сертификат для $MEDIA_DOMAIN уже существует. Пропускаем генерацию."
@@ -166,17 +208,24 @@ EOF
     nginx -t && systemctl reload nginx
 fi
 
-# === ШАГ 4: Подготовка папок ===
-log_step "Шаг 4: Папки"
+# === ШАГ 6: Подготовка папок ===
+log_step "Шаг 6: Папки и права"
 mkdir -p "$UPLOAD_DIR"
-chown -R www-data:www-data "$UPLOAD_DIR"
-chmod 755 "$UPLOAD_DIR"
 
-echo "<h1>KeyMaster Native HTTPS Ready</h1><p>Files are served by System Nginx.</p>" > "$UPLOAD_DIR/index.html"
+# Владелец - наш SFTP пользователь, группа www-data (для чтения Nginx)
+chown -R "$SFTP_USER:www-data" "$UPLOAD_DIR"
+chmod 750 "$UPLOAD_DIR"
+
+echo "<h1>KeyMaster Native + SFTP Ready</h1><p>Upload files via SFTP to $UPLOAD_DIR</p>" > "$UPLOAD_DIR/index.html"
+chown "$SFTP_USER:www-data" "$UPLOAD_DIR/index.html"
+chmod 640 "$UPLOAD_DIR/index.html"
+
 log_success "Папка создана: $UPLOAD_DIR"
+log_detail "Владелец: $SFTP_USER"
+log_detail "Группа: www-data"
 
-# === ШАГ 5: Основной конфиг Nginx (HTTPS) ===
-log_step "Шаг 5: Конфиг Nginx (HTTPS)"
+# === ШАГ 7: Основной конфиг Nginx (HTTPS) ===
+log_step "Шаг 7: Конфиг Nginx (HTTPS)"
 
 cat > "$MAIN_CONF" << EOF
 server {
@@ -249,11 +298,12 @@ else
     exit 1
 fi
 
-# === ШАГ 6: Метка ===
+# === ШАГ 8: Метка ===
 cat > "$MARKER_FILE" << EOF
 INSTALLED_AT=$(date '+%Y-%m-%d %H:%M:%S')
 SCRIPT_VERSION=$SCRIPT_VERSION
 DOMAIN=$MEDIA_DOMAIN
+USER=$SFTP_USER
 UPLOAD_DIR=$UPLOAD_DIR
 EOF
 chmod 644 "$MARKER_FILE"
@@ -261,17 +311,19 @@ chmod 644 "$MARKER_FILE"
 # === ИТОГ ===
 log_step "✅ Готово!"
 echo -e "${RED}────────────────────────────────${NC}"
-echo "🎉 KeyMaster Native установлен!"
+echo "🎉 KeyMaster Native + SFTP установлен!"
 echo -e "${RED}────────────────────────────────${NC}"
 echo ""
-echo "🔗 Адрес: https://$MEDIA_DOMAIN"
-echo "📁 Файлы лежат в: $UPLOAD_DIR"
+echo "🌐 Сайт: https://$MEDIA_DOMAIN"
+echo "📁 Папка файлов: $UPLOAD_DIR"
+echo "🔐 SFTP Доступ:"
+echo "   Host: YOUR_SERVER_IP"
+echo "   User: $SFTP_USER"
+echo "   Port: 22 (или ваш нестандартный SSH порт)"
+echo "   Auth: Public Key"
 echo ""
 echo "⚠️ Cloudflare:"
 echo "   • A-запись: $MEDIA_DOMAIN -> Твой IP"
-echo "   • Proxy Status: OFF (Серое облако) для прямого доступа"
+echo "   • Proxy Status: OFF (Серое облако)"
 echo "   • SSL/TLS Mode: Full (Strict)"
-echo ""
-echo "🧪 Проверка:"
-echo "   🔗 https://$MEDIA_DOMAIN/test_keymaster.txt"
 echo ""
