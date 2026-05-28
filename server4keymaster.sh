@@ -1,18 +1,22 @@
 #!/bin/bash
-# curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/server4keymaster.sh | bash
-SCRIPT_VERSION="v2.0-Native-SFTP"
-SCRIPT_NAME="KeyMaster Native + SFTP"
-MARKER_FILE="/etc/keymaster-native-sftp.marker"
-UPLOAD_DIR="/var/www/keymaster-media"
+# Запуск: curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/server4keymaster.sh | bash
+# === ВЕРСИЯ СКРИПТА ===
+SCRIPT_VERSION="v3.0-Native-SFTP"
+SCRIPT_NAME="KeyMaster Server (Native + SFTP)"
+# === МЕТКА УСТАНОВКИ ===
+MARKER_FILE="/etc/keymaster-server-setup.marker"
+UPLOAD_DIR_HOST="/var/www/keymaster-media"
 TEMP_CONF="/etc/nginx/sites-available/keymaster-temp"
 MAIN_CONF="/etc/nginx/sites-available/keymaster"
+set -e
 
-# Цвета
+# Цвета для вывода
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
+MAGENTA='\033[0;35m'
 NC='\033[0m'
 
 log_info()    { echo -e "${BLUE}[ℹ️]${NC} $1"; }
@@ -22,6 +26,7 @@ log_error()   { echo -e "${RED}[❌]${NC} $1"; }
 log_step()    { echo -e "\n${CYAN}────────────────────────────────${NC}\n${CYAN}[ ⚙️ ]${NC} $1\n${CYAN}────────────────────────────────${NC}\n"; }
 log_detail()  { echo -e "   ${CYAN}→${NC} $1"; }
 
+# === ЗАГОЛОВОК ===
 print_header() {
     echo ""
     echo -e "${RED}────────────────────────────────${NC}"
@@ -33,35 +38,37 @@ print_header() {
 
 print_header
 
+# Проверка root
 if [[ $EUID -ne 0 ]]; then
-    log_error "Запустите от имени root"
+    log_error "Скрипт должен быть запущен от имени root"
     exit 1
 fi
 
 # === ПРОВЕРКА МЕТКИ ===
 if [[ -f "$MARKER_FILE" ]]; then
-    log_warn "Найдена метка предыдущей установки"
-    PREV_DOMAIN=$(grep '^DOMAIN=' "$MARKER_FILE" | cut -d'=' -f2)
-    PREV_USER=$(grep '^USER=' "$MARKER_FILE" | cut -d'=' -f2)
-    echo "📋 Скрипт уже запускался."
-    echo "   Домен: $PREV_DOMAIN"
-    echo "   Пользователь SFTP: $PREV_USER"
+    log_warn "Обнаружена метка предыдущей установки"
+    echo "📋 Скрипт уже запускался на этом сервере."
+    echo "   Домен: $(grep '^DOMAIN=' "$MARKER_FILE" | cut -d'=' -f2)"
+    echo "   Пользователь: $(grep '^USER=' "$MARKER_FILE" | cut -d'=' -f2)"
     echo ""
-    echo -e "${YELLOW}Действие:${NC}"
-    echo "   1 - Пересоздать конфиги (обновить SSL/настройки)"
-    echo "   2 - 🗑️  Полный откат (удалить сайт, юзера, сертификаты)"
-    echo "   3 - Выход"
-    read -p "Выбор [1-3]: " ACTION_CHOICE < /dev/tty
+    echo -e "${YELLOW}Выберите действие:${NC}"
+    echo "   1 - Продолжить настройку (обновить конфиги/SSL)"
+    echo "   2 - 🗑️  ОТКАТИТЬ все изменения (удалить сайт, юзера, сертификаты)"
+    echo "   3 - Выйти"
+    read -p "Введите номер [1-3]: " ACTION_CHOICE < /dev/tty
     
     case $ACTION_CHOICE in
         2)
             log_step "🗑️  Откат"
+            PREV_USER=$(grep '^USER=' "$MARKER_FILE" | cut -d'=' -f2)
+            PREV_DOMAIN=$(grep '^DOMAIN=' "$MARKER_FILE" | cut -d'=' -f2)
+            
             # Удаляем конфиги nginx
             rm -f "$MAIN_CONF" /etc/nginx/sites-enabled/keymaster
             rm -f "$TEMP_CONF" /etc/nginx/sites-enabled/keymaster-temp
             
             # Удаляем папку файлов
-            [[ -d "$UPLOAD_DIR" ]] && rm -rf "$UPLOAD_DIR"
+            [[ -d "$UPLOAD_DIR_HOST" ]] && { log_detail "Удаление папки: $UPLOAD_DIR_HOST"; rm -rf "$UPLOAD_DIR_HOST"; }
             
             # Удаляем пользователя
             if [[ -n "$PREV_USER" ]] && id "$PREV_USER" &>/dev/null; then
@@ -77,47 +84,49 @@ if [[ -f "$MARKER_FILE" ]]; then
             
             nginx -t && systemctl reload nginx 2>/dev/null || true
             rm -f "$MARKER_FILE"
-            log_success "Откат выполнен"; exit 0
+            echo -e "${GREEN}✅ Откат завершён${NC}"; exit 0
             ;;
         3) exit 0 ;;
-        1) log_info "Обновление конфигурации..." ;;
+        1) log_info "Продолжение настройки..." ;;
         *) log_error "Неверный выбор"; exit 1 ;;
     esac
 fi
 
-[[ ! -f /etc/os-release ]] && { log_error "Неизвестная ОС"; exit 1; }
+[[ ! -f /etc/os-release ]] && { log_error "Не удалось определить ОС"; exit 1; }
 source /etc/os-release
 OS_ID=$ID
 log_info "ОС: $PRETTY_NAME"
 
 # === ШАГ 1: Домен ===
-log_step "Шаг 1: Домен"
+log_step "Шаг 1: Настройка домена"
 while true; do
     read -p "🌐 Введите домен (например, media.norest.art): " MEDIA_DOMAIN < /dev/tty
     MEDIA_DOMAIN=$(echo "$MEDIA_DOMAIN" | xargs | sed 's|https\?://||' | sed 's|/$||')
-    [[ -z "$MEDIA_DOMAIN" ]] && { log_error "Пусто"; continue; }
-    [[ ! "$MEDIA_DOMAIN" =~ \. ]] && { log_error "Нужна точка"; continue; }
+    [[ -z "$MEDIA_DOMAIN" ]] && { log_error "Домен не может быть пустым"; continue; }
+    [[ ! "$MEDIA_DOMAIN" =~ \. ]] && { log_error "Домен должен содержать точку"; continue; }
+    [[ ! "$MEDIA_DOMAIN" =~ ^[a-zA-Z0-9.-]+$ ]] && { log_error "Недопустимые символы"; continue; }
     break
 done
 log_success "Домен: $MEDIA_DOMAIN"
 
 # === ШАГ 2: Пользователь SFTP ===
 log_step "Шаг 2: Пользователь для SFTP"
-read -p "👤 Имя пользователя для загрузки файлов [keymaster]: " SFTP_USER < /dev/tty
-SFTP_USER=${SFTP_USER:-keymaster}
-[[ -z "$SFTP_USER" ]] && { log_error "Имя не может быть пустым"; exit 1; }
+read -p "👤 Имя пользователя для загрузки файлов [keymaster]: " UPLOAD_USER < /dev/tty
+UPLOAD_USER=${UPLOAD_USER:-keymaster}
+[[ -z "$UPLOAD_USER" ]] && { log_error "Имя не может быть пустым"; exit 1; }
 
-if id "$SFTP_USER" &>/dev/null; then
-    log_warn "Пользователь $SFTP_USER уже существует. Мы обновим его SSH ключ."
+if id "$UPLOAD_USER" &>/dev/null; then
+    log_warn "Пользователь $UPLOAD_USER уже существует. Мы обновим его SSH ключ."
 else
-    log_detail "Создание пользователя: $SFTP_USER"
-    useradd -m -s /bin/bash "$SFTP_USER"
+    log_detail "Создание пользователя: $UPLOAD_USER"
+    useradd -m -s /bin/bash "$UPLOAD_USER"
     log_success "Пользователь создан"
 fi
+log_success "Пользователь: $UPLOAD_USER"
 
-# === ШАГ 3: SSH Ключ ===
-log_step "Шаг 3: SSH Публичный Ключ"
-echo "🔑 Вставьте публичный SSH ключ (содержимое id_rsa.pub):"
+# === ШАГ 3: SSH-ключ ===
+log_step "Шаг 3: SSH-ключ"
+echo "🔑 Вставьте публичный SSH-ключ (содержимое id_rsa.pub):"
 echo "   (Нажмите Enter после вставки)"
 read -r SSH_PUBLIC_KEY < /dev/tty
 
@@ -127,14 +136,14 @@ if [[ -z "$SSH_PUBLIC_KEY" ]]; then
 fi
 
 # Настройка .ssh директории
-SSH_DIR="/home/$SFTP_USER/.ssh"
+SSH_DIR="/home/$UPLOAD_USER/.ssh"
 mkdir -p "$SSH_DIR"
 echo "$SSH_PUBLIC_KEY" > "$SSH_DIR/authorized_keys"
 chmod 700 "$SSH_DIR"
 chmod 600 "$SSH_DIR/authorized_keys"
-chown -R "$SFTP_USER:$SFTP_USER" "$SSH_DIR"
-log_success "SSH ключ установлен для пользователя $SFTP_USER"
-log_info "Теперь вы можете подключаться по SFTP: sftp $SFTP_USER@YOUR_SERVER_IP"
+chown -R "$UPLOAD_USER:$UPLOAD_USER" "$SSH_DIR"
+log_success "SSH ключ установлен для пользователя $UPLOAD_USER"
+log_info "Подключение по SFTP: sftp $UPLOAD_USER@YOUR_SERVER_IP"
 
 # === ШАГ 4: Установка Nginx и Certbot ===
 log_step "Шаг 4: Проверка Nginx и Certbot"
@@ -210,18 +219,18 @@ fi
 
 # === ШАГ 6: Подготовка папок ===
 log_step "Шаг 6: Папки и права"
-mkdir -p "$UPLOAD_DIR"
+mkdir -p "$UPLOAD_DIR_HOST"
 
 # Владелец - наш SFTP пользователь, группа www-data (для чтения Nginx)
-chown -R "$SFTP_USER:www-data" "$UPLOAD_DIR"
-chmod 750 "$UPLOAD_DIR"
+chown -R "$UPLOAD_USER:www-data" "$UPLOAD_DIR_HOST"
+chmod 750 "$UPLOAD_DIR_HOST"
 
-echo "<h1>KeyMaster Native + SFTP Ready</h1><p>Upload files via SFTP to $UPLOAD_DIR</p>" > "$UPLOAD_DIR/index.html"
-chown "$SFTP_USER:www-data" "$UPLOAD_DIR/index.html"
-chmod 640 "$UPLOAD_DIR/index.html"
+echo "<h1>KeyMaster Native + SFTP Ready</h1><p>Upload files via SFTP to $UPLOAD_DIR_HOST</p>" > "$UPLOAD_DIR_HOST/index.html"
+chown "$UPLOAD_USER:www-data" "$UPLOAD_DIR_HOST/index.html"
+chmod 640 "$UPLOAD_DIR_HOST/index.html"
 
-log_success "Папка создана: $UPLOAD_DIR"
-log_detail "Владелец: $SFTP_USER"
+log_success "Папка создана: $UPLOAD_DIR_HOST"
+log_detail "Владелец: $UPLOAD_USER"
 log_detail "Группа: www-data"
 
 # === ШАГ 7: Основной конфиг Nginx (HTTPS) ===
@@ -254,7 +263,7 @@ server {
     add_header X-Content-Type-Options "nosniff";
 
     # Корневая папка KeyMaster
-    root $UPLOAD_DIR;
+    root $UPLOAD_DIR_HOST;
     index index.html;
 
     client_max_body_size 100M;
@@ -298,32 +307,52 @@ else
     exit 1
 fi
 
-# === ШАГ 8: Метка ===
+# === ШАГ 8: Тестовый файл ===
+log_step "Шаг 8: Создание тестового файла"
+TEST_FILE="$UPLOAD_DIR_HOST/test_keymaster.txt"
+echo "KeyMaster server is ready! $(date)" > "$TEST_FILE"
+chown "$UPLOAD_USER:www-data" "$TEST_FILE"
+chmod 640 "$TEST_FILE"
+log_success "✅ Файл создан: $TEST_FILE"
+
+# === ШАГ 9: Метка ===
+log_step "Шаг 9: Метка установки"
 cat > "$MARKER_FILE" << EOF
 INSTALLED_AT=$(date '+%Y-%m-%d %H:%M:%S')
 SCRIPT_VERSION=$SCRIPT_VERSION
 DOMAIN=$MEDIA_DOMAIN
-USER=$SFTP_USER
-UPLOAD_DIR=$UPLOAD_DIR
+USER=$UPLOAD_USER
+UPLOAD_DIR=$UPLOAD_DIR_HOST
 EOF
 chmod 644 "$MARKER_FILE"
+log_success "✅ Метка создана"
 
-# === ИТОГ ===
-log_step "✅ Готово!"
+# === ШАГ 10: Итог ===
+log_step "✅ Настройка завершена!"
 echo -e "${RED}────────────────────────────────${NC}"
-echo "🎉 KeyMaster Native + SFTP установлен!"
+echo "🎉 Сервер KeyMaster готов к работе!"
 echo -e "${RED}────────────────────────────────${NC}"
 echo ""
-echo "🌐 Сайт: https://$MEDIA_DOMAIN"
-echo "📁 Папка файлов: $UPLOAD_DIR"
+echo "📋 Параметры:"
+echo "   • Домен:            $MEDIA_DOMAIN"
+echo "   • Пользователь SFTP:$UPLOAD_USER"
+echo "   • Папка загрузок:   $UPLOAD_DIR_HOST"
+echo ""
 echo "🔐 SFTP Доступ:"
 echo "   Host: YOUR_SERVER_IP"
-echo "   User: $SFTP_USER"
+echo "   User: $UPLOAD_USER"
 echo "   Port: 22 (или ваш нестандартный SSH порт)"
 echo "   Auth: Public Key"
 echo ""
-echo "⚠️ Cloudflare:"
+echo " Управление:"
+echo "   • Логи Nginx:       tail -f /var/log/nginx/keymaster-access.log"
+echo "   • Перезагрузка:     systemctl restart nginx"
+echo ""
+echo -e "${YELLOW}⚠️  Cloudflare:${NC}"
 echo "   • A-запись: $MEDIA_DOMAIN -> Твой IP"
 echo "   • Proxy Status: OFF (Серое облако)"
 echo "   • SSL/TLS Mode: Full (Strict)"
+echo ""
+echo "🧪 Проверка:"
+echo -e "   🔗 https://$MEDIA_DOMAIN/test_keymaster.txt"
 echo ""
