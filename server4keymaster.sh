@@ -1,7 +1,7 @@
 #!/bin/bash
 # Запуск: curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/server4keymaster.sh | bash
 # === ВЕРСИЯ СКРИПТА ===
-SCRIPT_VERSION="v3.1-FixSSL"
+SCRIPT_VERSION="v3.2"
 SCRIPT_NAME="KeyMaster Server (Native + SFTP)"
 # === МЕТКА УСТАНОВКИ ===
 MARKER_FILE="/etc/keymaster-server-setup.marker"
@@ -163,12 +163,13 @@ log_step "Шаг 5: SSL Сертификат"
 
 CERT_PATH="/etc/letsencrypt/live/$MEDIA_DOMAIN/fullchain.pem"
 
+# Проверяем, есть ли уже сертификат
 if [[ -f "$CERT_PATH" ]]; then
-    log_info "Сертификат для $MEDIA_DOMAIN уже существует. Проверяем валидность..."
-    # Проверяем, действительно ли сертификат для этого домена
+    log_info "Сертификат для $MEDIA_DOMAIN уже существует."
+    # Проверяем валидность домена в сертификате
     CERT_CN=$(openssl x509 -in "$CERT_PATH" -noout -subject 2>/dev/null | sed -n 's/.*CN = \(.*\)/\1/p')
     if [[ "$CERT_CN" != "$MEDIA_DOMAIN" ]]; then
-        log_warn "Сертификат выдан для $CERT_CN, а не для $MEDIA_DOMAIN. Перегенерируем..."
+        log_warn "Сертификат выдан для другого домена ($CERT_CN). Перегенерируем..."
         rm -rf "/etc/letsencrypt/live/$MEDIA_DOMAIN"
         rm -rf "/etc/letsencrypt/archive/$MEDIA_DOMAIN"
         rm -rf "/etc/letsencrypt/renewal/$MEDIA_DOMAIN.conf"
@@ -182,22 +183,30 @@ else
 fi
 
 if [[ "$GET_NEW_CERT" == "true" ]]; then
-    log_detail "Останавливаем Nginx для получения сертификата (Standalone mode)..."
+    log_detail "Останавливаем системный Nginx, чтобы освободить порт 80..."
     systemctl stop nginx
     
-    log_detail "Запрос сертификата для $MEDIA_DOMAIN..."
+    # Небольшая пауза, чтобы порт точно освободился
+    sleep 2
+    
+    log_detail "Запуск Certbot в режиме Standalone (порт 80)..."
     certbot certonly --standalone -d "$MEDIA_DOMAIN" --non-interactive --agree-tos -m admin@"$MEDIA_DOMAIN" --keep-until-expiring --expand
     
-    if [[ $? -eq 0 ]]; then
+    CERTBOT_EXIT_CODE=$?
+    
+    log_detail "Запускаем системный Nginx обратно..."
+    systemctl start nginx
+    
+    if [[ $CERTBOT_EXIT_CODE -eq 0 ]]; then
         log_success "Сертификат успешно получен!"
     else
-        log_error "Ошибка получения сертификата. Проверьте DNS A-запись для $MEDIA_DOMAIN"
-        systemctl start nginx
+        log_error "Ошибка получения сертификата."
+        log_error "Проверьте:"
+        log_error "1. DNS A-запись для $MEDIA_DOMAIN ведет на IP $SERVER_IP"
+        log_error "2. Порт 80 открыт в фаерволе (ufw allow 80/tcp)"
+        log_error "3. Нет других процессов, занимающих порт 80 после остановки Nginx"
         exit 1
     fi
-    
-    log_detail "Запускаем Nginx обратно..."
-    systemctl start nginx
 fi
 
 # === ШАГ 6: Подготовка папок ===
