@@ -1,6 +1,7 @@
 #!/bin/bash
 
 set -euo pipefail
+exec 3</dev/tty
 
 # Принудительное чтение с терминала, даже если stdout перенаправлен
 [[ -t 0 ]] || exec </dev/tty
