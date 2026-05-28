@@ -1,5 +1,5 @@
 #!/bin/bash
-# Запуск: curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/install-keymaster-native-sftp.sh | bash
+# curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/server4keymaster.sh | bash
 SCRIPT_VERSION="v2.0-Native-SFTP"
 SCRIPT_NAME="KeyMaster Native + SFTP"
 MARKER_FILE="/etc/keymaster-native-sftp.marker"
