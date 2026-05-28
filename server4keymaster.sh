@@ -3,11 +3,11 @@
 
 # === ВЕРСИЯ СКРИПТА ===
 SCRIPT_VERSION="v5.3"
-SCRIPT_NAME="KeyMaster Server (Safe Mode)"
+SCRIPT_NAME="KeyMaster Server"
 # === МЕТКА УСТАНОВКИ ===
 MARKER_FILE="/etc/keymaster-server-setup.marker"
 UPLOAD_DIR_HOST="/var/www/keymaster-media"
-HTTPS_PORT=4443 # <-- Нестандартный порт для HTTPS
+HTTPS_PORT=4443
 set -e
 
 # Цвета для вывода
@@ -65,7 +65,6 @@ print_header() {
     echo -e "${RED}────────────────────────────────${NC}"
     echo -e "  ${GREEN}${SCRIPT_NAME}${NC}"
     echo -e "  Версия: ${CYAN}${SCRIPT_VERSION}${NC}"
-    echo -e "  HTTPS Port: ${MAGENTA}${HTTPS_PORT}${NC}"
     echo -e "${RED}────────────────────────────────${NC}"
     echo ""
 }
