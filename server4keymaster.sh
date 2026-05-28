@@ -2,11 +2,12 @@
 # Запуск: curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/server4keymaster.sh | bash
 
 # === ВЕРСИЯ СКРИПТА ===
-SCRIPT_VERSION="v4.0"
-SCRIPT_NAME="KeyMaster Server (Native + SFTP)"
+SCRIPT_VERSION="v5.1"
+SCRIPT_NAME="KeyMaster Server (Safe Mode)"
 # === МЕТКА УСТАНОВКИ ===
 MARKER_FILE="/etc/keymaster-server-setup.marker"
 UPLOAD_DIR_HOST="/var/www/keymaster-media"
+HTTPS_PORT=4443 # <-- Нестандартный порт для HTTPS
 set -e
 
 # Цвета для вывода
@@ -25,12 +26,46 @@ log_error()   { echo -e "${RED}[❌]${NC} $1"; }
 log_step()    { echo -e "\n${CYAN}────────────────────────────────${NC}\n${CYAN}[ ⚙️ ]${NC} $1\n${CYAN}────────────────────────────────${NC}\n"; }
 log_detail()  { echo -e "   ${CYAN}→${NC} $1"; }
 
+# === ФУНКЦИЯ ПАУЗЫ И ПОДТВЕРЖДЕНИЯ ===
+pause_script() {
+    local message="$1"
+    local critical="${2:-false}" # Если true, то по умолчанию 'Нет' (безопаснее)
+    
+    echo ""
+    log_warn "$message"
+    echo ""
+    
+    if [[ "$critical" == "true" ]]; then
+        read -p "❓ Хотите продолжить? (y/N): " confirm < /dev/tty
+    else
+        read -p "❓ Хотите продолжить? (Y/n): " confirm < /dev/tty
+    fi
+    
+    # Приводим к нижнему регистру
+    confirm=$(echo "$confirm" | tr '[:upper:]' '[:lower:]')
+    
+    # Если критично и пустой ввод -> считаем как Нет. Если не критично и пустой -> считаем как Да.
+    if [[ "$critical" == "true" ]]; then
+        if [[ "$confirm" != "y" && "$confirm" != "yes" ]]; then
+            log_error "Операция прервана пользователем."
+            exit 1
+        fi
+    else
+        if [[ "$confirm" == "n" || "$confirm" == "no" ]]; then
+            log_error "Операция прервана пользователем."
+            exit 1
+        fi
+    fi
+    echo ""
+}
+
 # === ЗАГОЛОВОК ===
 print_header() {
     echo ""
     echo -e "${RED}────────────────────────────────${NC}"
     echo -e "  ${GREEN}${SCRIPT_NAME}${NC}"
     echo -e "  Версия: ${CYAN}${SCRIPT_VERSION}${NC}"
+    echo -e "  HTTPS Port: ${MAGENTA}${HTTPS_PORT}${NC}"
     echo -e "${RED}────────────────────────────────${NC}"
     echo ""
 }
@@ -58,6 +93,8 @@ if [[ -f "$MARKER_FILE" ]]; then
     
     case $ACTION_CHOICE in
         2)
+            pause_script "Вы уверены, что хотите полностью удалить KeyMaster и все связанные данные?" "true"
+            
             log_step "🗑️  Откат"
             PREV_USER=$(grep '^USER=' "$MARKER_FILE" | cut -d'=' -f2)
             PREV_DOMAIN=$(grep '^DOMAIN=' "$MARKER_FILE" | cut -d'=' -f2)
@@ -99,7 +136,7 @@ log_info "ОС: $PRETTY_NAME"
 # === ШАГ 1: Домен ===
 log_step "Шаг 1: Настройка домена"
 while true; do
-    read -p "🌐 Введите домен (например, media.norest.art): " MEDIA_DOMAIN < /dev/tty
+    read -p "🌐 Введите домен: " MEDIA_DOMAIN < /dev/tty
     MEDIA_DOMAIN=$(echo "$MEDIA_DOMAIN" | xargs | sed 's|https\?://||' | sed 's|/$||')
     [[ -z "$MEDIA_DOMAIN" ]] && { log_error "Домен не может быть пустым"; continue; }
     [[ ! "$MEDIA_DOMAIN" =~ \. ]] && { log_error "Домен должен содержать точку"; continue; }
@@ -119,7 +156,7 @@ UPLOAD_USER=${UPLOAD_USER:-keymaster}
 [[ -z "$UPLOAD_USER" ]] && { log_error "Имя не может быть пустым"; exit 1; }
 
 if id "$UPLOAD_USER" &>/dev/null; then
-    log_warn "Пользователь $UPLOAD_USER уже существует. Мы обновим его SSH ключ."
+    pause_script "Пользователь '$UPLOAD_USER' уже существует. Его SSH ключи будут перезаписаны. Продолжить?" "true"
 else
     log_detail "Создание пользователя: $UPLOAD_USER"
     useradd -m -s /bin/bash "$UPLOAD_USER"
@@ -154,7 +191,7 @@ install_deps() {
     case $OS_ID in
         ubuntu|debian)
             apt-get update
-            apt-get install -y nginx certbot python3-certbot-nginx curl
+            apt-get install -y nginx certbot python3-certbot-nginx curl ufw
             ;;
         centos|rhel|fedora|almalinux|rocky)
             yum install -y epel-release
@@ -179,6 +216,27 @@ if ! command -v certbot &>/dev/null; then
     log_success "Certbot установлен"
 fi
 
+# === ПРОВЕРКА КОНФЛИКТОВ ПОРТОВ ===
+log_step "Проверка конфликтов портов"
+CONFLICT_FOUND=false
+
+# Проверяем порт 80
+if ss -tlnp | grep ":80 " &>/dev/null; then
+    log_warn "Порт 80 занят. Это нормально, если у вас уже стоит Nginx."
+    CONFLICT_FOUND=true
+fi
+
+# Проверяем порт 4443 (наш целевой)
+if ss -tlnp | grep ":${HTTPS_PORT} " &>/dev/null; then
+    log_error "Порт ${HTTPS_PORT} уже занят другим процессом!"
+    ss -tlnp | grep ":${HTTPS_PORT} "
+    pause_script "Освободите порт ${HTTPS_PORT} перед запуском скрипта." "true"
+fi
+
+if [[ "$CONFLICT_FOUND" == "true" ]]; then
+    pause_script "Обнаружены занятые стандартные порты. Скрипт продолжит работу." "false"
+fi
+
 # === ШАГ 5: Получение SSL Сертификата (Standalone Mode) ===
 log_step "Шаг 5: SSL Сертификат"
 
@@ -188,7 +246,7 @@ if [[ -f "$CERT_PATH" ]]; then
     log_info "Сертификат для $MEDIA_DOMAIN уже существует. Проверяем валидность..."
     CERT_CN=$(openssl x509 -in "$CERT_PATH" -noout -subject 2>/dev/null | sed -n 's/.*CN = \(.*\)/\1/p')
     if [[ "$CERT_CN" != "$MEDIA_DOMAIN" ]]; then
-        log_warn "Сертификат выдан для $CERT_CN, а не для $MEDIA_DOMAIN. Перегенерируем..."
+        pause_script "Сертификат выдан для '$CERT_CN', а не для '$MEDIA_DOMAIN'. Он будет удален и получен заново. Продолжить?" "true"
         rm -rf "/etc/letsencrypt/live/$MEDIA_DOMAIN"
         rm -rf "/etc/letsencrypt/archive/$MEDIA_DOMAIN"
         rm -rf "/etc/letsencrypt/renewal/$MEDIA_DOMAIN.conf"
@@ -206,13 +264,15 @@ if [[ "$GET_NEW_CERT" == "true" ]]; then
     systemctl stop nginx
     
     log_detail "Запрос сертификата для $MEDIA_DOMAIN..."
-    certbot certonly --standalone -d "$MEDIA_DOMAIN" --non-interactive --agree-tos -m admin@"$MEDIA_DOMAIN" --keep-until-expiring --expand
+    # Standalone поднимает свой веб-сервер на порту 80
+    certbot certonly --standalone -d "$MEDIA_DOMAIN" --non-interactive --agree-tos -m admin@"$MEDIA_DOMAIN" --keep-until-expanding --expand
     
     if [[ $? -eq 0 ]]; then
         log_success "Сертификат успешно получен!"
     else
         log_error "Ошибка получения сертификата. Проверьте DNS A-запись для $MEDIA_DOMAIN"
         systemctl start nginx
+        pause_script "Не удалось получить сертификат. Нажмите Enter для выхода." "true"
         exit 1
     fi
     
@@ -222,6 +282,11 @@ fi
 
 # === ШАГ 6: Подготовка папок ===
 log_step "Шаг 6: Папки и права"
+if [[ -d "$UPLOAD_DIR_HOST" ]]; then
+    pause_script "Папка $UPLOAD_DIR_HOST уже существует. Она будет очищена и пересоздана. Продолжить?" "true"
+    rm -rf "$UPLOAD_DIR_HOST"
+fi
+
 mkdir -p "$UPLOAD_DIR_HOST"
 
 # Владелец - наш SFTP пользователь, группа www-data (для чтения Nginx)
@@ -236,19 +301,24 @@ log_success "Папка создана: $UPLOAD_DIR_HOST"
 log_detail "Владелец: $UPLOAD_USER"
 log_detail "Группа: www-data"
 
-# === ШАГ 7: Основной конфиг Nginx (HTTPS) ===
-log_step "Шаг 7: Конфиг Nginx (HTTPS)"
+# === ШАГ 7: Основной конфиг Nginx (HTTPS на порту 4443) ===
+log_step "Шаг 7: Конфиг Nginx (HTTPS :${HTTPS_PORT})"
 log_detail "Имя файла конфига: $NGINX_CONF_NAME"
+
+if [[ -f "$MAIN_CONF" ]]; then
+    pause_script "Конфиг Nginx $MAIN_CONF уже существует. Он будет перезаписан. Продолжить?" "true"
+fi
 
 cat > "$MAIN_CONF" << EOF
 server {
     listen 80;
     server_name $MEDIA_DOMAIN www.$MEDIA_DOMAIN;
-    return 301 https://\$host\$request_uri;
+    # Редирект на HTTPS с явным указанием порта
+    return 301 https://\$host:${HTTPS_PORT}\$request_uri;
 }
 
 server {
-    listen 443 ssl http2;
+    listen ${HTTPS_PORT} ssl http2;
     server_name $MEDIA_DOMAIN www.$MEDIA_DOMAIN;
 
     # Пути к сертификатам (строго для этого домена)
@@ -308,7 +378,23 @@ if [[ $? -eq 0 ]]; then
     log_success "Конфиг применен и Nginx перезагружен"
 else
     log_error "Ошибка в конфиге Nginx. Проверьте синтаксис."
+    pause_script "Ошибка в конфиге Nginx. Нажмите Enter для выхода и ручной проверки." "true"
     exit 1
+fi
+
+# === ШАГ 7.5: Настройка Firewall (UFW) ===
+log_step "Шаг 7.5: Настройка Firewall"
+if command -v ufw &>/dev/null; then
+    if ufw status | grep -q "Status: active"; then
+        log_detail "UFW активен. Открываем порт ${HTTPS_PORT}..."
+        ufw allow ${HTTPS_PORT}/tcp
+        ufw reload
+        log_success "Порт ${HTTPS_PORT} открыт в firewall"
+    else
+        log_info "UFW не активен. Пропускаем настройку правил."
+    fi
+else
+    log_info "UFW не установлен. Убедитесь, что порт ${HTTPS_PORT} открыт в панели вашего хостинга/облака."
 fi
 
 # === ШАГ 8: Тестовый файл ===
@@ -328,6 +414,7 @@ DOMAIN=$MEDIA_DOMAIN
 USER=$UPLOAD_USER
 UPLOAD_DIR=$UPLOAD_DIR_HOST
 NGINX_CONF=$NGINX_CONF_NAME
+HTTPS_PORT=$HTTPS_PORT
 EOF
 chmod 644 "$MARKER_FILE"
 log_success "✅ Метка создана"
@@ -343,6 +430,7 @@ echo "   • Домен:            $MEDIA_DOMAIN"
 echo "   • Пользователь SFTP:$UPLOAD_USER"
 echo "   • Папка загрузок:   $UPLOAD_DIR_HOST"
 echo "   • Конфиг Nginx:     $NGINX_CONF_NAME"
+echo "   • HTTPS Порт:       ${HTTPS_PORT}"
 echo ""
 echo "🔐 SFTP Доступ:"
 echo "   Host: YOUR_SERVER_IP"
@@ -354,11 +442,11 @@ echo " Управление:"
 echo "   • Логи Nginx:       tail -f /var/log/nginx/keymaster-access.log"
 echo "   • Перезагрузка:     systemctl restart nginx"
 echo ""
-echo -e "${YELLOW}⚠️  Cloudflare:${NC}"
+echo -e "${YELLOW}⚠️  Cloudflare / DNS:${NC}"
 echo "   • A-запись: $MEDIA_DOMAIN -> Твой IP"
-echo "   • Proxy Status: OFF (Серое облако)"
+echo "   • Proxy Status: OFF (Серое облако) - обязательно для Standalone SSL!"
 echo "   • SSL/TLS Mode: Full (Strict)"
 echo ""
 echo "🧪 Проверка:"
-echo -e "   🔗 https://$MEDIA_DOMAIN/test_keymaster.txt"
+echo -e "   🔗 https://$MEDIA_DOMAIN:${HTTPS_PORT}/test_keymaster.txt"
 echo ""
