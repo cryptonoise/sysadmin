@@ -20,7 +20,7 @@ safe_read() {
 
 # === Блок 1: Приветствие и инициализация ===
 SCRIPT_NAME="Linux Server Pre-Config"
-SCRIPT_VERSION="1.5.1"
+SCRIPT_VERSION="1.5.2"
 SCRIPT_DESC="Предварительная настройка Linux сервера"
 
 # Очистка экрана
@@ -89,8 +89,9 @@ for pkg in "${PACKAGES[@]}"; do
 done
 
 printf "• Включаем и запускаем fail2ban...\n"
-systemctl enable fail2ban || true
-systemctl start fail2ban || true
+# Скрываем вывод systemd-sysv-install для чистоты
+systemctl enable fail2ban >/dev/null 2>&1 || true
+systemctl start fail2ban >/dev/null 2>&1 || true
 printf "✅  Утилиты установлены.\n\n"
 
 # === Блок 5: Настройка SSH (Порт и Ключи) ===
@@ -186,10 +187,31 @@ if [[ -f "$SSH_CONFIG" ]]; then
     fi
     
     printf "• Перезапуск SSH сервиса...\n"
+    
+    # Определяем имя службы SSH (ssh для Debian/Ubuntu, sshd для CentOS)
+    SSH_SERVICE="ssh"
+    if systemctl list-unit-files | grep -q "sshd.service"; then
+        SSH_SERVICE="sshd"
+    fi
+    
     # Проверка конфигурации перед перезапуском
     if sshd -t; then
-        systemctl restart sshd || systemctl restart ssh
-        printf "✅  SSH настроен и перезапущен на порту %s\n" "$SSH_PORT"
+        if systemctl restart "$SSH_SERVICE" 2>/dev/null; then
+            printf "✅  SSH настроен и перезапущен на порту %s (служба: %s)\n" "$SSH_PORT" "$SSH_SERVICE"
+        else
+            # Попытка перезапустить альтернативное имя, если первое не сработало
+            if [ "$SSH_SERVICE" = "ssh" ]; then
+                ALT_SERVICE="sshd"
+            else
+                ALT_SERVICE="ssh"
+            fi
+            
+            if systemctl restart "$ALT_SERVICE" 2>/dev/null; then
+                 printf "✅  SSH настроен и перезапущен на порту %s (служба: %s)\n" "$SSH_PORT" "$ALT_SERVICE"
+            else
+                 printf "⚠️  Не удалось автоматически перезапустить SSH. Пожалуйста, проверьте настройки и перезагрузите сервер вручную.\n"
+            fi
+        fi
     else
         printf "❌  Ошибка в конфигурации SSH. Перезапуск отменен. Проверьте ${SSH_CONFIG}\n"
         exit 1
