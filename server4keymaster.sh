@@ -339,10 +339,9 @@ server {
     ssl_session_cache shared:SSL:10m;
     ssl_session_timeout 1d;
 
-    # === ИСПРАВЛЕНИЕ КОДИРОВКИ ===
+    #Кодировка
     charset utf-8;
     source_charset utf-8;
-    # ============================
 
     add_header Strict-Transport-Security "max-age=63072000" always;
     add_header X-Frame-Options "SAMEORIGIN";
