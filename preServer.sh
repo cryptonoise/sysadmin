@@ -15,7 +15,7 @@ safe_read() {
 
 # === Блок 1: Приветствие и инициализация ===
 SCRIPT_NAME="Linux Server Pre-Config"
-SCRIPT_VERSION="1.5.3"
+SCRIPT_VERSION="1.6.0"
 SCRIPT_DESC="Предварительная настройка Linux сервера"
 
 clear
@@ -69,7 +69,7 @@ printf "✅  Система успешно обновлена!\n\n"
 # === Блок 4: Установка необходимых утилит ===
 printf "📦  Установка полезных утилит...\n"
 echo "──────────────────────────────────────"
-PACKAGES=("unattended-upgrades" "fail2ban" "htop" "iotop" "nethogs" "curl" "wget" "git")
+PACKAGES=("unattended-upgrades" "fail2ban" "htop" "iotop" "nethogs" "curl" "wget" "git" "cron")
 
 for pkg in "${PACKAGES[@]}"; do
     if ! dpkg -s "$pkg" &>/dev/null; then
@@ -83,6 +83,11 @@ done
 printf "• Включаем и запускаем fail2ban...\n"
 systemctl enable fail2ban >/dev/null 2>&1 || true
 systemctl start fail2ban >/dev/null 2>&1 || true
+
+printf "• Включаем и запускаем cron...\n"
+systemctl enable cron >/dev/null 2>&1 || true
+systemctl start cron >/dev/null 2>&1 || true
+
 printf "✅  Утилиты установлены.\n\n"
 
 # === Блок 5: Настройка SSH (Порт и Ключи) ===
@@ -199,17 +204,39 @@ else
     exit 1
 fi
 
-# === Блок 6: Итоговая информация ===
+# === Блок 6: Настройка автоматических обновлений (Cron) ===
+printf "\n📅  Настройка ежедневных обновлений...\n"
+echo "──────────────────────────────────────"
+
+CRON_FILE="/etc/cron.d/daily-security-update"
+LOG_FILE="/var/log/auto-update.log"
+
+cat > "$CRON_FILE" << EOF
+# Ежедневное обновление системы в 03:00
+# Логи сохраняются в $LOG_FILE
+0 3 * * * root apt-get update -qq && apt-get upgrade -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" && apt-get autoremove -y >> $LOG_FILE 2>&1
+EOF
+
+chmod 0644 "$CRON_FILE"
+
+# Перезапуск cron для применения изменений
+systemctl reload cron || true
+
+printf "✅  Задача добавлена: обновление каждый день в 03:00.\n"
+printf "   Лог файл: %s\n\n" "$LOG_FILE"
+
+# === Блок 7: Итоговая информация ===
 printf "\n✅  Готово! Сервер предварительно настроен.\n"
 printf "   • Порт SSH: %s\n" "$SSH_PORT"
 printf "   • Root-доступ: Разрешен (только по ключу)\n"
 printf "   • Вход по паролю: Отключен\n"
-printf "   • Fail2ban: Активен\n\n"
+printf "   • Fail2ban: Активен\n"
+printf "   • Автообновления: Включены (ежедневно в 03:00)\n\n"
 
 printf "⚠️  ВАЖНО: Не закрывайте текущее соединение, пока не проверите вход по новому порту в другом окне!\n"
 printf "   Команда для проверки: ssh -p %s root@<IP_СЕРВЕРА>\n\n" "$SSH_PORT"
 
-# === Блок 7: Перезагрузка ===
+# === Блок 8: Перезагрузка ===
 if [ -t 1 ] && [ -e /dev/tty ]; then
     safe_read "🔄  Перезагрузить сервер сейчас? [y/N]: " response
     case "$response" in
