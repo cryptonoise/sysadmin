@@ -2,7 +2,7 @@
 # Запуск: curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/server4keymaster.sh | bash
 
 # === ВЕРСИЯ СКРИПТА ===
-SCRIPT_VERSION="v5.1"
+SCRIPT_VERSION="v5.2-FixCertbotArgs"
 SCRIPT_NAME="KeyMaster Server (Safe Mode)"
 # === МЕТКА УСТАНОВКИ ===
 MARKER_FILE="/etc/keymaster-server-setup.marker"
@@ -221,8 +221,14 @@ log_step "Проверка конфликтов портов"
 CONFLICT_FOUND=false
 
 # Проверяем порт 80
-if ss -tlnp | grep ":80 " &>/dev/null; then
-    log_warn "Порт 80 занят. Это нормально, если у вас уже стоит Nginx."
+PORT_80_INFO=$(ss -tlnp | grep ":80 " || true)
+if [[ -n "$PORT_80_INFO" ]]; then
+    log_warn "Порт 80 занят."
+    echo -e "   ${YELLOW}Кем занят:${NC} $PORT_80_INFO"
+    echo ""
+    log_detail "Для получения SSL-сертификата скрипт использует режим 'Standalone'."
+    log_detail "Это означает, что Nginx будет ВРЕМЕННО остановлен."
+    log_detail "После получения сертификата Nginx будет автоматически запущен обратно."
     CONFLICT_FOUND=true
 fi
 
@@ -234,7 +240,7 @@ if ss -tlnp | grep ":${HTTPS_PORT} " &>/dev/null; then
 fi
 
 if [[ "$CONFLICT_FOUND" == "true" ]]; then
-    pause_script "Обнаружены занятые стандартные порты. Скрипт продолжит работу." "false"
+    pause_script "Если вы согласны с временной остановкой Nginx, продолжите." "false"
 fi
 
 # === ШАГ 5: Получение SSL Сертификата (Standalone Mode) ===
@@ -264,8 +270,9 @@ if [[ "$GET_NEW_CERT" == "true" ]]; then
     systemctl stop nginx
     
     log_detail "Запрос сертификата для $MEDIA_DOMAIN..."
-    # Standalone поднимает свой веб-сервер на порту 80
-    certbot certonly --standalone -d "$MEDIA_DOMAIN" --non-interactive --agree-tos -m admin@"$MEDIA_DOMAIN" --keep-until-expanding --expand
+    # Исправлено: убран неверный флаг --keep-until-expanding
+    # Добавлен --http-01-port 80 для явности
+    certbot certonly --standalone --http-01-port 80 -d "$MEDIA_DOMAIN" --non-interactive --agree-tos -m admin@"$MEDIA_DOMAIN" --keep-until-expiring --expand
     
     if [[ $? -eq 0 ]]; then
         log_success "Сертификат успешно получен!"
