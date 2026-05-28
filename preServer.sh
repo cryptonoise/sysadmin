@@ -15,7 +15,7 @@ safe_read() {
 
 # === Блок 1: Приветствие и инициализация ===
 SCRIPT_NAME="Linux Server Pre-Config"
-SCRIPT_VERSION="1.6.0"
+SCRIPT_VERSION="1.6.1"
 SCRIPT_DESC="Предварительная настройка Linux сервера"
 
 clear
@@ -219,8 +219,11 @@ EOF
 
 chmod 0644 "$CRON_FILE"
 
-# Перезапуск cron для применения изменений
-systemctl reload cron || true
+# Cron сам подхватывает файлы из /etc/cron.d, перезагрузка не обязательна, 
+# но убедимся, что сервис запущен.
+if ! systemctl is-active --quiet cron; then
+    systemctl start cron
+fi
 
 printf "✅  Задача добавлена: обновление каждый день в 03:00.\n"
 printf "   Лог файл: %s\n\n" "$LOG_FILE"
