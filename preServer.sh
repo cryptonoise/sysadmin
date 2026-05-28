@@ -20,26 +20,19 @@ safe_read() {
 
 # === Блок 1: Приветствие и инициализация ===
 SCRIPT_NAME="Linux Server Pre-Config"
-SCRIPT_VERSION="1.4.0"
+SCRIPT_VERSION="1.5.0"
 SCRIPT_DESC="Предварительная настройка Linux сервера"
 
 # Очистка экрана
 clear
 
-# Рисуем рамку (ширина 60 символов)
-WIDTH=60
-printf "\033[1;34m╔"
-printf "%${WIDTH}s" | tr ' ' '═'
-printf "╗\033[0m\n"
-
-# Форматируем строки внутри рамки
-printf "\033[1;34m║\033[0m  \033[1;33m%-56s\033[0m \033[1;34m║\033[0m\n" "$SCRIPT_NAME"
-printf "\033[1;34m║\033[0m  Версия: %-49s \033[1;34m║\033[0m\n" "$SCRIPT_VERSION"
-printf "\033[1;34m║\033[0m  %-56s \033[1;34m║\033[0m\n" "$SCRIPT_DESC"
-
-printf "\033[1;34m╚"
-printf "%${WIDTH}s" | tr ' ' '═'
-printf "╝\033[0m\n"
+# Вывод заголовка с линиями
+printf "\n"
+printf "════════════════════════════════════════════\n"
+printf "  %s\n" "$SCRIPT_NAME"
+printf "  Версия: %s\n" "$SCRIPT_VERSION"
+printf "  %s\n" "$SCRIPT_DESC"
+printf "════════════════════════════════════════════\n"
 
 printf "\nНажмите Enter чтобы начать..."
 
