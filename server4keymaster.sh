@@ -2,7 +2,7 @@
 # Запуск: curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/server4keymaster.sh | bash
 
 # === ВЕРСИЯ СКРИПТА ===
-SCRIPT_VERSION="v5.2-FixCertbotArgs"
+SCRIPT_VERSION="v5.3"
 SCRIPT_NAME="KeyMaster Server (Safe Mode)"
 # === МЕТКА УСТАНОВКИ ===
 MARKER_FILE="/etc/keymaster-server-setup.marker"
@@ -339,6 +339,11 @@ server {
     ssl_session_cache shared:SSL:10m;
     ssl_session_timeout 1d;
 
+    # === ИСПРАВЛЕНИЕ КОДИРОВКИ ===
+    charset utf-8;
+    source_charset utf-8;
+    # ============================
+
     add_header Strict-Transport-Security "max-age=63072000" always;
     add_header X-Frame-Options "SAMEORIGIN";
     add_header X-Content-Type-Options "nosniff";
@@ -407,7 +412,8 @@ fi
 # === ШАГ 8: Тестовый файл ===
 log_step "Шаг 8: Создание тестового файла"
 TEST_FILE="$UPLOAD_DIR_HOST/test_keymaster.txt"
-echo "KeyMaster server is ready! $(date)" > "$TEST_FILE"
+# Используем универсальный формат даты, чтобы избежать проблем с локалью при генерации файла
+echo "KeyMaster server is ready! $(date -u '+%Y-%m-%d %H:%M:%S UTC')" > "$TEST_FILE"
 chown "$UPLOAD_USER:www-data" "$TEST_FILE"
 chmod 640 "$TEST_FILE"
 log_success "✅ Файл создан: $TEST_FILE"
