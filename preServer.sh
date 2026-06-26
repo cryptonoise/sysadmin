@@ -16,7 +16,7 @@ safe_read() {
 
 # === Блок 1: Приветствие и инициализация ===
 SCRIPT_NAME="Linux Server Pre-Config"
-SCRIPT_VERSION="1.6.3"
+SCRIPT_VERSION="1.7.0"
 SCRIPT_DESC="Предварительная настройка Linux сервера"
 
 # Метка запуска
@@ -260,13 +260,352 @@ printf "   • Что делается: update, upgrade, autoremove\n"
 printf "   • Скрипт: %s\n" "$UPDATE_SCRIPT"
 printf "   • Лог файл: %s\n\n" "$LOG_FILE"
 
-# === Блок 7: Итоговая информация ===
+# === Блок 7: Установка и настройка Fastfetch ===
+printf "\n🖥️  Установка Fastfetch...\n"
+echo "──────────────────────────────────────"
+
+FASTFETCH_INSTALLED=false
+
+if command -v fastfetch &>/dev/null; then
+    printf "ℹ️  Fastfetch уже установлен: $(fastfetch --version 2>/dev/null | head -1)\n"
+    FASTFETCH_INSTALLED=true
+else
+    # Попытка 1: официальный PPA (Ubuntu/Debian)
+    if command -v add-apt-repository &>/dev/null; then
+        printf "• Добавляем PPA ppa:zhangsongcui3371/fastfetch...\n"
+        add-apt-repository -y ppa:zhangsongcui3371/fastfetch >/dev/null 2>&1 && \
+        apt-get update -qq && \
+        apt-get install -y --no-install-recommends fastfetch && \
+        FASTFETCH_INSTALLED=true || true
+    fi
+
+    # Попытка 2: скачать deb напрямую с GitHub (последний релиз)
+    if ! $FASTFETCH_INSTALLED; then
+        printf "• PPA недоступен, загружаю deb-пакет с GitHub...\n"
+        ARCH=$(dpkg --print-architecture)
+        FF_URL=$(curl -fsSL "https://api.github.com/repos/fastfetch-cli/fastfetch/releases/latest" \
+            | grep "browser_download_url" \
+            | grep "linux-${ARCH}.deb" \
+            | head -1 \
+            | cut -d '"' -f 4)
+
+        if [ -n "$FF_URL" ]; then
+            TMP_DEB=$(mktemp /tmp/fastfetch-XXXXXX.deb)
+            curl -fsSL "$FF_URL" -o "$TMP_DEB"
+            dpkg -i "$TMP_DEB" || apt-get install -f -y
+            rm -f "$TMP_DEB"
+            FASTFETCH_INSTALLED=true
+        fi
+    fi
+
+    if $FASTFETCH_INSTALLED; then
+        printf "✅  Fastfetch установлен: $(fastfetch --version 2>/dev/null | head -1)\n"
+    else
+        printf "⚠️  Не удалось установить Fastfetch — пропускаю настройку.\n"
+    fi
+fi
+
+# Конфигурация fastfetch
+if $FASTFETCH_INSTALLED; then
+    printf "• Создаём конфигурацию fastfetch...\n"
+    mkdir -p /root/.config/fastfetch
+
+    cat > /root/.config/fastfetch/config.jsonc << 'FFCONFIG'
+{
+  "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/json_schema.json",
+  "logo": {
+    "type": "builtin",
+    "source": "none",
+    "padding": {
+      "top": 1
+    }
+  },
+  "display": {
+    "separator": "  ",
+    "color": {
+      "keys": "cyan",
+      "title": "blue"
+    }
+  },
+  "modules": [
+    {
+      "type": "custom",
+      "format": "                   \u001b[38;5;39m##########\u001b[0m"
+    },
+    {
+      "type": "custom",
+      "format": "              \u001b[38;5;39m#####          \u001b[38;5;39m#####\u001b[0m"
+    },
+    {
+      "type": "custom",
+      "format": "          \u001b[38;5;39m####     \u001b[38;5;51m++++++++++    \u001b[38;5;39m###\u001b[0m"
+    },
+    {
+      "type": "custom",
+      "format": "        \u001b[38;5;39m###   \u001b[38;5;51m+++++          \u001b[38;5;51m++++   \u001b[38;5;39m##\u001b[0m"
+    },
+    {
+      "type": "custom",
+      "format": "       \u001b[38;5;39m##   \u001b[38;5;51m++    \u001b[38;5;46m===========   \u001b[38;5;51m+++   \u001b[38;5;39m##\u001b[0m"
+    },
+    {
+      "type": "custom",
+      "format": "     \u001b[38;5;39m##   \u001b[38;5;51m++   \u001b[38;5;46m===           \u001b[38;5;46m===   \u001b[38;5;51m++   \u001b[38;5;39m##\u001b[0m"
+    },
+    {
+      "type": "custom",
+      "format": "    \u001b[38;5;39m##   \u001b[38;5;51m++  \u001b[38;5;46m===  \u001b[38;5;226m-----------  \u001b[38;5;46m===   \u001b[38;5;51m+   \u001b[38;5;39m#\u001b[0m"
+    },
+    {
+      "type": "custom",
+      "format": "    \u001b[38;5;39m#   \u001b[38;5;51m+   \u001b[38;5;46m==  \u001b[38;5;226m--   \u001b[38;5;208m::::    \u001b[38;5;226m--  \u001b[38;5;46m==   \u001b[38;5;51m+   \u001b[38;5;39m#\u001b[0m"
+    },
+    {
+      "type": "custom",
+      "format": "   \u001b[38;5;39m#   \u001b[38;5;51m+   \u001b[38;5;46m==  \u001b[38;5;226m-   \u001b[38;5;208m::    \u001b[38;5;208m:::   \u001b[38;5;226m-  \u001b[38;5;46m==  \u001b[38;5;51m++  \u001b[38;5;39m##\u001b[0m"
+    },
+    {
+      "type": "custom",
+      "format": "   \u001b[38;5;39m#   \u001b[38;5;51m+   \u001b[38;5;46m=  \u001b[38;5;226m-   \u001b[38;5;208m:  \u001b[38;5;201m*****  \u001b[38;5;208m:  \u001b[38;5;226m--  \u001b[38;5;46m=   \u001b[38;5;51m+   \u001b[38;5;39m#\u001b[0m"
+    },
+    {
+      "type": "custom",
+      "format": "   \u001b[38;5;39m#   \u001b[38;5;51m+  \u001b[38;5;46m=   \u001b[38;5;226m-  \u001b[38;5;208m:   \u001b[38;5;201m* \u001b[1;38;5;231m@ \u001b[38;5;201m*   \u001b[38;5;208m:  \u001b[38;5;226m-   \u001b[38;5;46m=  \u001b[38;5;51m+   \u001b[38;5;39m#\u001b[0m"
+    },
+    {
+      "type": "custom",
+      "format": "   \u001b[38;5;39m#   \u001b[38;5;51m+   \u001b[38;5;46m=  \u001b[38;5;226m-   \u001b[38;5;208m:  \u001b[38;5;201m*****  \u001b[38;5;208m:  \u001b[38;5;226m--  \u001b[38;5;46m=   \u001b[38;5;51m+   \u001b[38;5;39m#\u001b[0m"
+    },
+    {
+      "type": "custom",
+      "format": "   \u001b[38;5;39m#   \u001b[38;5;51m+   \u001b[38;5;46m==  \u001b[38;5;226m-   \u001b[38;5;208m::    \u001b[38;5;208m:::   \u001b[38;5;226m-  \u001b[38;5;46m==  \u001b[38;5;51m++  \u001b[38;5;39m##\u001b[0m"
+    },
+    {
+      "type": "custom",
+      "format": "    \u001b[38;5;39m#   \u001b[38;5;51m+   \u001b[38;5;46m==  \u001b[38;5;226m--   \u001b[38;5;208m::::    \u001b[38;5;226m--  \u001b[38;5;46m==   \u001b[38;5;51m+   \u001b[38;5;39m#\u001b[0m"
+    },
+    {
+      "type": "custom",
+      "format": "    \u001b[38;5;39m##   \u001b[38;5;51m++  \u001b[38;5;46m===  \u001b[38;5;226m-----------  \u001b[38;5;46m===   \u001b[38;5;51m+   \u001b[38;5;39m#\u001b[0m"
+    },
+    {
+      "type": "custom",
+      "format": "     \u001b[38;5;39m##   \u001b[38;5;51m++   \u001b[38;5;46m===           \u001b[38;5;46m===   \u001b[38;5;51m++   \u001b[38;5;39m##\u001b[0m"
+    },
+    {
+      "type": "custom",
+      "format": "       \u001b[38;5;39m##   \u001b[38;5;51m++    \u001b[38;5;46m===========   \u001b[38;5;51m+++   \u001b[38;5;39m##\u001b[0m"
+    },
+    {
+      "type": "custom",
+      "format": "        \u001b[38;5;39m###   \u001b[38;5;51m+++++          \u001b[38;5;51m++++   \u001b[38;5;39m##\u001b[0m"
+    },
+    {
+      "type": "custom",
+      "format": "          \u001b[38;5;39m####     \u001b[38;5;51m++++++++++    \u001b[38;5;39m###\u001b[0m"
+    },
+    {
+      "type": "custom",
+      "format": "              \u001b[38;5;39m#####          \u001b[38;5;39m#####\u001b[0m"
+    },
+    {
+      "type": "custom",
+      "format": "                   \u001b[38;5;39m##########\u001b[0m"
+    },
+    {
+      "type": "custom",
+      "format": ""
+    },
+    {
+      "type": "title",
+      "fqdn": false
+    },
+    {
+      "type": "separator",
+      "string": "─"
+    },
+    {
+      "type": "custom",
+      "format": "─── Hardware ────────────────────────────────"
+    },
+    {
+      "type": "cpu",
+      "key": "  CPU"
+    },
+    {
+      "type": "gpu",
+      "key": "  GPU",
+      "detectionMethod": "auto"
+    },
+    {
+      "type": "display",
+      "key": "  Display"
+    },
+    {
+      "type": "memory",
+      "key": "  RAM"
+    },
+    {
+      "type": "disk",
+      "key": "  Disk /",
+      "folders": "/"
+    },
+    {
+      "type": "disk",
+      "key": "  Disk /home",
+      "folders": "/home"
+    },
+    {
+      "type": "custom",
+      "format": ""
+    },
+    {
+      "type": "custom",
+      "format": "─── Software ────────────────────────────────"
+    },
+    {
+      "type": "os",
+      "key": "  OS"
+    },
+    {
+      "type": "kernel",
+      "key": "  Kernel"
+    },
+    {
+      "type": "packages",
+      "key": "  Packages"
+    },
+    {
+      "type": "shell",
+      "key": "  Shell"
+    },
+    {
+      "type": "terminal",
+      "key": "  Terminal"
+    },
+    {
+      "type": "terminalfont",
+      "key": "  Font"
+    },
+    {
+      "type": "custom",
+      "format": ""
+    },
+    {
+      "type": "custom",
+      "format": "─── Network & System ────────────────────────"
+    },
+    {
+      "type": "localip",
+      "key": "  Local IP",
+      "showIpv6": false
+    },
+    {
+      "type": "publicip",
+      "key": "  Public IP",
+      "timeout": 3000
+    },
+    {
+      "type": "dns",
+      "key": "  DNS"
+    },
+    {
+      "type": "users",
+      "key": "  Users"
+    },
+    {
+      "type": "custom",
+      "format": ""
+    },
+    {
+      "type": "custom",
+      "format": "─── Uptime / Age ────────────────────────────"
+    },
+    {
+      "type": "os",
+      "key": "  OS Age",
+      "format": "{7}"
+    },
+    {
+      "type": "uptime",
+      "key": "  Uptime"
+    },
+    {
+      "type": "custom",
+      "format": ""
+    },
+    {
+      "type": "colors",
+      "symbol": "circle"
+    }
+  ]
+}
+FFCONFIG
+
+    printf "✅  Конфиг fastfetch создан: /root/.config/fastfetch/config.jsonc\n"
+
+    # --- Отключение стандартного MOTD ---
+    printf "• Отключаем стандартный MOTD...\n"
+
+    # Отключаем динамический MOTD (Ubuntu/Debian)
+    if [ -d /etc/update-motd.d ]; then
+        chmod -x /etc/update-motd.d/* 2>/dev/null || true
+        printf "  ✓ Скрипты /etc/update-motd.d отключены\n"
+    fi
+
+    # Очищаем статический /etc/motd
+    truncate -s 0 /etc/motd 2>/dev/null || true
+
+    # Отключаем PrintLastLog и PrintMotd в sshd_config
+    if grep -q "^PrintMotd" "$SSH_CONFIG" 2>/dev/null; then
+        sed -i 's/^PrintMotd.*/PrintMotd no/' "$SSH_CONFIG"
+    else
+        echo "PrintMotd no" >> "$SSH_CONFIG"
+    fi
+    if grep -q "^PrintLastLog" "$SSH_CONFIG" 2>/dev/null; then
+        sed -i 's/^PrintLastLog.*/PrintLastLog no/' "$SSH_CONFIG"
+    else
+        echo "PrintLastLog no" >> "$SSH_CONFIG"
+    fi
+
+    # --- Запуск fastfetch при SSH-сессии через .bashrc ---
+    BASHRC="/root/.bashrc"
+    FF_MARKER="# fastfetch on SSH login"
+
+    if ! grep -qF "$FF_MARKER" "$BASHRC" 2>/dev/null; then
+        cat >> "$BASHRC" << 'BASHEOF'
+
+# fastfetch on SSH login
+if [ -n "$SSH_CONNECTION" ] && command -v fastfetch &>/dev/null; then
+    fastfetch
+fi
+BASHEOF
+        printf "✅  Fastfetch добавлен в ~/.bashrc (запуск при SSH-входе)\n"
+    else
+        printf "ℹ️  Fastfetch уже прописан в ~/.bashrc\n"
+    fi
+
+    # Также для /etc/profile.d (подхватывают sh-совместимые оболочки)
+    cat > /etc/profile.d/fastfetch-ssh.sh << 'PROFEOF'
+if [ -n "$SSH_CONNECTION" ] && command -v fastfetch >/dev/null 2>&1; then
+    fastfetch
+fi
+PROFEOF
+    chmod 0644 /etc/profile.d/fastfetch-ssh.sh
+    printf "✅  /etc/profile.d/fastfetch-ssh.sh создан\n\n"
+fi
+
+# === Блок 8: Итоговая информация ===
 printf "\n✅  Готово! Сервер предварительно настроен.\n"
 printf "   • Порт SSH: %s\n" "$SSH_PORT"
 printf "   • Root-доступ: Разрешен (только по ключу)\n"
 printf "   • Вход по паролю: Отключен\n"
 printf "   • Fail2ban: Активен\n"
-printf "   • Автообновления: Включены (ежедневно в 03:00)\n\n"
+printf "   • Автообновления: Включены (ежедневно в 03:00)\n"
+if $FASTFETCH_INSTALLED; then
+    printf "   • Fastfetch: Установлен (запускается при SSH-входе вместо MOTD)\n"
+fi
+printf "\n"
 
 printf "⚠️  ВАЖНО: Не закрывайте текущее соединение, пока не проверите вход по новому порту в другом окне!\n"
 printf "   Команда для проверки: ssh -p %s root@<IP_СЕРВЕРА>\n\n" "$SSH_PORT"
@@ -281,7 +620,7 @@ mkdir -p "$MARKER_DIR"
 chmod 0644 "$MARKER_FILE"
 printf "🏷️   Метка запуска установлена: %s\n\n" "$MARKER_FILE"
 
-# === Блок 8: Перезагрузка ===
+# === Блок 9: Перезагрузка ===
 if [ -t 1 ] && [ -e /dev/tty ]; then
     safe_read "🔄  Перезагрузить сервер сейчас? [y/N]: " response
     case "$response" in
