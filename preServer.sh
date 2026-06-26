@@ -16,7 +16,7 @@ safe_read() {
 
 # === Блок 1: Приветствие и инициализация ===
 SCRIPT_NAME="Linux Server Pre-Config"
-SCRIPT_VERSION="1.8.0"
+SCRIPT_VERSION="1.7.0"
 SCRIPT_DESC="Предварительная настройка Linux сервера"
 
 # Метка запуска
@@ -77,7 +77,7 @@ printf "✅  Система успешно обновлена!\n\n"
 # === Блок 4: Установка необходимых утилит ===
 printf "📦  Установка полезных утилит...\n"
 echo "──────────────────────────────────────"
-PACKAGES=("unattended-upgrades" "fail2ban" "htop" "iotop" "nethogs" "curl" "wget" "git" "cron")
+PACKAGES=("unattended-upgrades" "fail2ban" "htop" "iotop" "nethogs" "curl" "wget" "git" "cron" "rg")
 
 for pkg in "${PACKAGES[@]}"; do
     if ! dpkg -s "$pkg" &>/dev/null; then
@@ -310,241 +310,94 @@ if $FASTFETCH_INSTALLED; then
     printf "• Создаём конфигурацию fastfetch...\n"
     mkdir -p /root/.config/fastfetch
 
+    # --- (A) Вставляем ваш рабочий конфиг fastfetch (с большим рекурсивным логотипом)
     cat > /root/.config/fastfetch/config.jsonc << 'FFCONFIG'
 {
   "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/json_schema.json",
   "logo": {
-    "type": "builtin",
-    "source": "none",
-    "padding": {
-      "top": 1
-    }
+    "source": "arch",
+    "color": { "1": "blue", "2": "dim_blue" },
+    "height": 15,
+    "width": 30,
+    "padding": { "top": 10, "left": 10, "right": 0 }
   },
   "display": {
-    "separator": "  ",
-    "color": {
-      "keys": "cyan",
-      "title": "blue"
-    }
+    "color": { "keys": "blue", "title": "bright_magenta", "separator": "white" }
   },
   "modules": [
     {
-      "type": "custom",
-      "format": "                   \u001b[38;5;39m##########\u001b[0m"
-    },
-    {
-      "type": "custom",
-      "format": "              \u001b[38;5;39m#####          \u001b[38;5;39m#####\u001b[0m"
-    },
-    {
-      "type": "custom",
-      "format": "          \u001b[38;5;39m####     \u001b[38;5;51m++++++++++    \u001b[38;5;39m###\u001b[0m"
-    },
-    {
-      "type": "custom",
-      "format": "        \u001b[38;5;39m###   \u001b[38;5;51m+++++          \u001b[38;5;51m++++   \u001b[38;5;39m##\u001b[0m"
-    },
-    {
-      "type": "custom",
-      "format": "       \u001b[38;5;39m##   \u001b[38;5;51m++    \u001b[38;5;46m===========   \u001b[38;5;51m+++   \u001b[38;5;39m##\u001b[0m"
-    },
-    {
-      "type": "custom",
-      "format": "     \u001b[38;5;39m##   \u001b[38;5;51m++   \u001b[38;5;46m===           \u001b[38;5;46m===   \u001b[38;5;51m++   \u001b[38;5;39m##\u001b[0m"
-    },
-    {
-      "type": "custom",
-      "format": "    \u001b[38;5;39m##   \u001b[38;5;51m++  \u001b[38;5;46m===  \u001b[38;5;226m-----------  \u001b[38;5;46m===   \u001b[38;5;51m+   \u001b[38;5;39m#\u001b[0m"
-    },
-    {
-      "type": "custom",
-      "format": "    \u001b[38;5;39m#   \u001b[38;5;51m+   \u001b[38;5;46m==  \u001b[38;5;226m--   \u001b[38;5;208m::::    \u001b[38;5;226m--  \u001b[38;5;46m==   \u001b[38;5;51m+   \u001b[38;5;39m#\u001b[0m"
-    },
-    {
-      "type": "custom",
-      "format": "   \u001b[38;5;39m#   \u001b[38;5;51m+   \u001b[38;5;46m==  \u001b[38;5;226m-   \u001b[38;5;208m::    \u001b[38;5;208m:::   \u001b[38;5;226m-  \u001b[38;5;46m==  \u001b[38;5;51m++  \u001b[38;5;39m##\u001b[0m"
-    },
-    {
-      "type": "custom",
-      "format": "   \u001b[38;5;39m#   \u001b[38;5;51m+   \u001b[38;5;46m=  \u001b[38;5;226m-   \u001b[38;5;208m:  \u001b[38;5;201m*****  \u001b[38;5;208m:  \u001b[38;5;226m--  \u001b[38;5;46m=   \u001b[38;5;51m+   \u001b[38;5;39m#\u001b[0m"
-    },
-    {
-      "type": "custom",
-      "format": "   \u001b[38;5;39m#   \u001b[38;5;51m+  \u001b[38;5;46m=   \u001b[38;5;226m-  \u001b[38;5;208m:   \u001b[38;5;201m* \u001b[1;38;5;231m@ \u001b[38;5;201m*   \u001b[38;5;208m:  \u001b[38;5;226m-   \u001b[38;5;46m=  \u001b[38;5;51m+   \u001b[38;5;39m#\u001b[0m"
-    },
-    {
-      "type": "custom",
-      "format": "   \u001b[38;5;39m#   \u001b[38;5;51m+   \u001b[38;5;46m=  \u001b[38;5;226m-   \u001b[38;5;208m:  \u001b[38;5;201m*****  \u001b[38;5;208m:  \u001b[38;5;226m--  \u001b[38;5;46m=   \u001b[38;5;51m+   \u001b[38;5;39m#\u001b[0m"
-    },
-    {
-      "type": "custom",
-      "format": "   \u001b[38;5;39m#   \u001b[38;5;51m+   \u001b[38;5;46m==  \u001b[38;5;226m-   \u001b[38;5;208m::    \u001b[38;5;208m:::   \u001b[38;5;226m-  \u001b[38;5;46m==  \u001b[38;5;51m++  \u001b[38;5;39m##\u001b[0m"
-    },
-    {
-      "type": "custom",
-      "format": "    \u001b[38;5;39m#   \u001b[38;5;51m+   \u001b[38;5;46m==  \u001b[38;5;226m--   \u001b[38;5;208m::::    \u001b[38;5;226m--  \u001b[38;5;46m==   \u001b[38;5;51m+   \u001b[38;5;39m#\u001b[0m"
-    },
-    {
-      "type": "custom",
-      "format": "    \u001b[38;5;39m##   \u001b[38;5;51m++  \u001b[38;5;46m===  \u001b[38;5;226m-----------  \u001b[38;5;46m===   \u001b[38;5;51m+   \u001b[38;5;39m#\u001b[0m"
-    },
-    {
-      "type": "custom",
-      "format": "     \u001b[38;5;39m##   \u001b[38;5;51m++   \u001b[38;5;46m===           \u001b[38;5;46m===   \u001b[38;5;51m++   \u001b[38;5;39m##\u001b[0m"
-    },
-    {
-      "type": "custom",
-      "format": "       \u001b[38;5;39m##   \u001b[38;5;51m++    \u001b[38;5;46m===========   \u001b[38;5;51m+++   \u001b[38;5;39m##\u001b[0m"
-    },
-    {
-      "type": "custom",
-      "format": "        \u001b[38;5;39m###   \u001b[38;5;51m+++++          \u001b[38;5;51m++++   \u001b[38;5;39m##\u001b[0m"
-    },
-    {
-      "type": "custom",
-      "format": "          \u001b[38;5;39m####     \u001b[38;5;51m++++++++++    \u001b[38;5;39m###\u001b[0m"
-    },
-    {
-      "type": "custom",
-      "format": "              \u001b[38;5;39m#####          \u001b[38;5;39m#####\u001b[0m"
-    },
-    {
-      "type": "custom",
-      "format": "                   \u001b[38;5;39m##########\u001b[0m"
-    },
-    {
-      "type": "custom",
-      "format": ""
-    },
-    {
       "type": "title",
-      "fqdn": false
+      "color": { "user": "bright_magenta", "at": "white", "host": "blue" }
     },
-    {
-      "type": "separator",
-      "string": "─"
-    },
+
     {
       "type": "custom",
-      "format": "─── Hardware ────────────────────────────────"
+      "format": "\u001b[94m┏━━━━━━━━━━━━━━━━━━━━┓\n┃ ┏━━━━━━━━━━━━━━━━┓ ┃\n┃ ┃ ┏━━━━━━━━━━━━┓ ┃ ┃\n┃ ┃ ┃ ┏━━━━━━━━┓ ┃ ┃ ┃\n┃ ┃ ┃ ┃        ┃ ┃ ┃ ┃\n┃ ┃ ┃ ┗━━━━━━━━┛ ┃ ┃ ┃\n┃ ┃ ┗━━━━━━━━━━━━┛ ┃ ┃\n┃ ┗━━━━━━━━━━━━━━━━┛ ┃\n┗━━━━━━━━━━━━━━━━━━━━┛\u001b[0m"
     },
+
+    { "type": "custom", "format": "\u001b[97m┌──────────────────────Hardware──────────────────────┐\u001b[0m" },
+    { "type": "host", "key": "▣ PC : ", "keyColor": "green" },
+    { "type": "cpu", "key": "   ├▢ : ", "keyColor": "green" },
+    { "type": "gpu", "key": "   ├▢ : ", "keyColor": "green" },
+    { "type": "memory", "key": "   ├▢ : ", "keyColor": "green" },
+    { "type": "disk", "key": "   ├▢ : ", "keyColor": "green" },
+    { "type": "battery", "key": "   └▢ : ", "keyColor": "green" },
+    { "type": "poweradapter", "key": "└ └▢ : ", "keyColor": "green" },
+    { "type": "custom", "format": "\u001b[97m└────────────────────────────────────────────────────┘\u001b[0m" },
+
+    "break",
+
+    { "type": "custom", "format": "\u001b[97m┌──────────────────────Software──────────────────────┐\u001b[0m" },
+    { "type": "os", "key": "▣ OS : ", "keyColor": "yellow" },
+    { "type": "kernel", "key": "   ├▢ : ", "keyColor": "yellow" },
+    { "type": "bios", "key": "   ├▢ : ", "keyColor": "yellow" },
+    { "type": "packages", "key": "   ├▢ : ", "keyColor": "yellow" },
+    { "type": "shell", "key": "   ├▢ : ", "keyColor": "yellow" },
+    { "type": "locale", "key": "   └▢ : ", "keyColor": "yellow" },
+    { "type": "custom", "format": "\u001b[97m└────────────────────────────────────────────────────┘\u001b[0m" },
+
+    "break",
+
+    { "type": "custom", "format": "\u001b[97m┌──────────────────────Desktop───────────────────────┐\u001b[0m" },
+    { "type": "de", "key": "▣ DE : ", "keyColor": "blue" },
+    { "type": "lm", "key": "   ├▢ : ", "keyColor": "blue" },
+    { "type": "wm", "key": "   ├▢ : ", "keyColor": "blue" },
+    { "type": "wmtheme", "key": "   ├▢ : ", "keyColor": "blue" },
+    { "type": "theme", "key": "   ├▢ : ", "keyColor": "blue" },
+    { "type": "icons", "key": "   ├◧ : ", "keyColor": "blue" },
+    { "type": "font", "key": "   ├▣ : ", "keyColor": "blue" },
+    { "type": "cursor", "key": "   ├◨ : ", "keyColor": "blue" },
+    { "type": "terminal", "key": "   ├◩ : ", "keyColor": "blue" },
+    { "type": "terminalfont", "key": "   └▣ : ", "keyColor": "blue" },
+    { "type": "custom", "format": "\u001b[97m└────────────────────────────────────────────────────┘\u001b[0m" },
+
+    "break",
+
+    { "type": "custom", "format": "\u001b[97m┌──────────────────────Network───────────────────────┐\u001b[0m" },
+    { "type": "localip", "key": "▣ IP : ", "keyColor": "cyan" },
+    { "type": "custom", "format": "\u001b[97m└────────────────────────────────────────────────────┘\u001b[0m" },
+
+    "break",
+
+    { "type": "custom", "format": "\u001b[97m┌─────────────────Uptime / Age / DT──────────────────┐\u001b[0m" },
+    { "type": "uptime", "key": "▣ UP : ", "keyColor": "magenta" },
     {
-      "type": "cpu",
-      "key": "  CPU"
+      "type": "command",
+      "key": "   ├⏳ : ",
+      "keyColor": "magenta",
+      "text": "birth_install=$(stat -c %W /); current=$(date +%s); time_progression=$((current - birth_install)); days_difference=$((time_progression / 86400)); echo $days_difference days"
     },
-    {
-      "type": "gpu",
-      "key": "  GPU",
-      "detectionMethod": "auto"
-    },
-    {
-      "type": "display",
-      "key": "  Display"
-    },
-    {
-      "type": "memory",
-      "key": "  RAM"
-    },
-    {
-      "type": "disk",
-      "key": "  Disk /",
-      "folders": "/"
-    },
-    {
-      "type": "disk",
-      "key": "  Disk /home",
-      "folders": "/home"
-    },
-    {
-      "type": "custom",
-      "format": ""
-    },
-    {
-      "type": "custom",
-      "format": "─── Software ────────────────────────────────"
-    },
-    {
-      "type": "os",
-      "key": "  OS"
-    },
-    {
-      "type": "kernel",
-      "key": "  Kernel"
-    },
-    {
-      "type": "packages",
-      "key": "  Packages"
-    },
-    {
-      "type": "shell",
-      "key": "  Shell"
-    },
-    {
-      "type": "terminal",
-      "key": "  Terminal"
-    },
-    {
-      "type": "terminalfont",
-      "key": "  Font"
-    },
-    {
-      "type": "custom",
-      "format": ""
-    },
-    {
-      "type": "custom",
-      "format": "─── Network & System ────────────────────────"
-    },
-    {
-      "type": "localip",
-      "key": "  Local IP",
-      "showIpv6": false
-    },
-    {
-      "type": "publicip",
-      "key": "  Public IP",
-      "timeout": 3000
-    },
-    {
-      "type": "dns",
-      "key": "  DNS"
-    },
-    {
-      "type": "users",
-      "key": "  Users"
-    },
-    {
-      "type": "custom",
-      "format": ""
-    },
-    {
-      "type": "custom",
-      "format": "─── Uptime / Age ────────────────────────────"
-    },
-    {
-      "type": "os",
-      "key": "  OS Age",
-      "format": "{7}"
-    },
-    {
-      "type": "uptime",
-      "key": "  Uptime"
-    },
-    {
-      "type": "custom",
-      "format": ""
-    },
-    {
-      "type": "colors",
-      "symbol": "circle"
-    }
+    { "type": "datetime", "key": "   └⏰ : ", "keyColor": "magenta" },
+    { "type": "custom", "format": "\u001b[97m└────────────────────────────────────────────────────┘\u001b[0m" },
+
+    { "type": "colors", "paddingLeft": 2, "symbol": "circle" }
   ]
 }
 FFCONFIG
 
     printf "✅  Конфиг fastfetch создан: /root/.config/fastfetch/config.jsonc\n"
 
-    # --- Отключение стандартного MOTD ---
+    # --- Отключение стандартного MOTD (как было у вас ранее) ---
     printf "• Отключаем стандартный MOTD...\n"
 
     # Отключаем динамический MOTD (Ubuntu/Debian)
@@ -568,31 +421,21 @@ FFCONFIG
         echo "PrintLastLog no" >> "$SSH_CONFIG"
     fi
 
-    # --- Запуск fastfetch при SSH-сессии через .bashrc ---
-    BASHRC="/root/.bashrc"
-    FF_MARKER="# fastfetch on SSH login"
-
-    if ! grep -qF "$FF_MARKER" "$BASHRC" 2>/dev/null; then
-        cat >> "$BASHRC" << 'BASHEOF'
-
-# fastfetch on SSH login
-if [ -n "$SSH_CONNECTION" ] && command -v fastfetch &>/dev/null; then
-    fastfetch
-fi
-BASHEOF
-        printf "✅  Fastfetch добавлен в ~/.bashrc (запуск при SSH-входе)\n"
-    else
-        printf "ℹ️  Fastfetch уже прописан в ~/.bashrc\n"
-    fi
-
-    # Также для /etc/profile.d (подхватывают sh-совместимые оболочки)
+    # --- Запуск fastfetch при SSH-сессии через /etc/profile.d ---
+    # (B) Создаём /etc/profile.d/fastfetch-ssh.sh с guard, чтобы fastfetch запускался лишь один раз
     cat > /etc/profile.d/fastfetch-ssh.sh << 'PROFEOF'
+# fastfetch: run once per session (guarded)
+if [ -n "${FASTFETCH_RAN:-}" ]; then
+    return 0
+fi
+
 if [ -n "$SSH_CONNECTION" ] && command -v fastfetch >/dev/null 2>&1; then
     fastfetch
+    export FASTFETCH_RAN=1
 fi
 PROFEOF
     chmod 0644 /etc/profile.d/fastfetch-ssh.sh
-    printf "✅  /etc/profile.d/fastfetch-ssh.sh создан\n\n"
+    printf "✅  /etc/profile.d/fastfetch-ssh.sh создан (fastfetch запускается при SSH, только один раз)\n\n"
 fi
 
 # === Блок 8: Итоговая информация ===
