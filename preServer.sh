@@ -38,6 +38,8 @@ safe_read "" DUMMY_INPUT
 printf "\n🚀  Начинаю базовую настройку безопасности сервера...\n\n"
 
 export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+export NEEDRESTART_SUSPEND=1
 export APT_LISTCHANGES_FRONTEND=none
 
 # === Блок 2: Проверка и восстановление dpkg при сбоях ===
@@ -185,6 +187,7 @@ if [[ -f "$SSH_CONFIG" ]]; then
         SSH_SERVICE="sshd"
     fi
     
+    mkdir -p /run/sshd
     if sshd -t; then
         if systemctl restart "$SSH_SERVICE" 2>/dev/null; then
             printf "✅  SSH настроен и перезапущен на порту %s (служба: %s)\n" "$SSH_PORT" "$SSH_SERVICE"
@@ -223,6 +226,8 @@ TASK_NAME="daily-security-update"
 cat > "$UPDATE_SCRIPT" << 'EOF'
 #!/bin/bash
 export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+export NEEDRESTART_SUSPEND=1
 LOG_FILE="/var/log/auto-update.log"
 {
     echo "===== $(date '+%F %T') start ====="
