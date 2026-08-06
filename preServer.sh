@@ -16,7 +16,7 @@ safe_read() {
 
 # === Блок 1: Приветствие и инициализация ===
 SCRIPT_NAME="Linux Server Pre-Config"
-SCRIPT_VERSION="1.7.3"
+SCRIPT_VERSION="1.7.0"
 SCRIPT_DESC="Предварительная настройка Linux сервера"
 
 # Метка запуска
@@ -378,7 +378,7 @@ if $FASTFETCH_INSTALLED; then
     # heredoc (в отличие от JSON) не раскрывает escape-последовательности.
     {
         printf '\033[94m'
-        cat << 'BOXART'
+        cat << 'BOXART_TOP'
 ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
 ┃ ┏━━━━━━━━━━━━━━━━━━━━━━━━━━┓ ┃
 ┃ ┃ ┏━━━━━━━━━━━━━━━━━━━━━━┓ ┃ ┃
@@ -386,7 +386,10 @@ if $FASTFETCH_INSTALLED; then
 ┃ ┃ ┃ ┃ ┏━━━━━━━━━━━━━━┓ ┃ ┃ ┃ ┃
 ┃ ┃ ┃ ┃ ┃ ┏━━━━━━━━━━┓ ┃ ┃ ┃ ┃ ┃
 ┃ ┃ ┃ ┃ ┃ ┃          ┃ ┃ ┃ ┃ ┃ ┃
-┃ ┃ ┃ ┃ ┃ ┃          ┃ ┃ ┃ ┃ ┃ ┃
+BOXART_TOP
+        # Средняя строка с зелёной точкой-статусом (● = скрипт настройки отработал)
+        printf '┃ ┃ ┃ ┃ ┃ ┃    \033[92m●\033[94m     ┃ ┃ ┃ ┃ ┃ ┃\n'
+        cat << 'BOXART_BOTTOM'
 ┃ ┃ ┃ ┃ ┃ ┃          ┃ ┃ ┃ ┃ ┃ ┃
 ┃ ┃ ┃ ┃ ┃ ┗━━━━━━━━━━┛ ┃ ┃ ┃ ┃ ┃
 ┃ ┃ ┃ ┃ ┗━━━━━━━━━━━━━━┛ ┃ ┃ ┃ ┃
@@ -394,7 +397,7 @@ if $FASTFETCH_INSTALLED; then
 ┃ ┃ ┗━━━━━━━━━━━━━━━━━━━━━━┛ ┃ ┃
 ┃ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━┛ ┃
 ┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
-BOXART
+BOXART_BOTTOM
         printf '\033[0m\n'
     } > /root/.config/fastfetch/logo.txt
     printf "✅  Файл логотипа создан: /root/.config/fastfetch/logo.txt\n"
@@ -412,41 +415,40 @@ BOXART
     "color": { "keys": "blue", "title": "bright_magenta", "separator": "white" }
   },
   "modules": [
-    {
-      "type": "title",
-      "color": { "user": "bright_magenta", "at": "white", "host": "blue" }
-    },
-
-    { "type": "custom", "format": "\u001b[97m┌──────────────────────Hardware──────────────────────┐\u001b[0m" },
+    { "type": "custom", "format": "\u001b[97m┌──────────────────────────────────────Hardware──────────────────────────────────────┐\u001b[0m" },
     { "type": "host", "key": "▣ PC : ", "keyColor": "green" },
     { "type": "cpu", "key": "   ├▢ : ", "keyColor": "green" },
+    { "type": "cpuusage", "key": "   ├▢ : ", "keyColor": "green" },
+    { "type": "loadavg", "key": "   ├▢ : ", "keyColor": "green" },
     { "type": "gpu", "key": "   ├▢ : ", "keyColor": "green" },
     { "type": "memory", "key": "   ├▢ : ", "keyColor": "green" },
+    { "type": "swap", "key": "   ├▢ : ", "keyColor": "green" },
     { "type": "disk", "key": "   ├▢ : ", "keyColor": "green" },
     { "type": "battery", "key": "   ├▢ : ", "keyColor": "green" },
     { "type": "poweradapter", "key": "   └▢ : ", "keyColor": "green" },
-    { "type": "custom", "format": "\u001b[97m└────────────────────────────────────────────────────┘\u001b[0m" },
+    { "type": "custom", "format": "\u001b[97m└────────────────────────────────────────────────────────────────────────────────────┘\u001b[0m" },
 
     "break",
 
-    { "type": "custom", "format": "\u001b[97m┌──────────────────────Software──────────────────────┐\u001b[0m" },
+    { "type": "custom", "format": "\u001b[97m┌──────────────────────────────────────Software──────────────────────────────────────┐\u001b[0m" },
     { "type": "os", "key": "▣ OS : ", "keyColor": "yellow" },
     { "type": "kernel", "key": "   ├▢ : ", "keyColor": "yellow" },
     { "type": "bios", "key": "   ├▢ : ", "keyColor": "yellow" },
     { "type": "packages", "key": "   ├▢ : ", "keyColor": "yellow" },
     { "type": "shell", "key": "   ├▢ : ", "keyColor": "yellow" },
     { "type": "locale", "key": "   └▢ : ", "keyColor": "yellow" },
-    { "type": "custom", "format": "\u001b[97m└────────────────────────────────────────────────────┘\u001b[0m" },
+    { "type": "custom", "format": "\u001b[97m└────────────────────────────────────────────────────────────────────────────────────┘\u001b[0m" },
 
     "break",
 
-    { "type": "custom", "format": "\u001b[97m┌──────────────────────Network───────────────────────┐\u001b[0m" },
+    { "type": "custom", "format": "\u001b[97m┌───────────────────────────────────────Network──────────────────────────────────────┐\u001b[0m" },
     { "type": "localip", "key": "▣ IP : ", "keyColor": "cyan" },
-    { "type": "custom", "format": "\u001b[97m└────────────────────────────────────────────────────┘\u001b[0m" },
+    { "type": "publicip", "key": "   └▢ : ", "keyColor": "cyan", "timeout": 1000 },
+    { "type": "custom", "format": "\u001b[97m└────────────────────────────────────────────────────────────────────────────────────┘\u001b[0m" },
 
     "break",
 
-    { "type": "custom", "format": "\u001b[97m┌─────────────────Uptime / Age / DT──────────────────┐\u001b[0m" },
+    { "type": "custom", "format": "\u001b[97m┌─────────────────────────────────Uptime / Age / DT──────────────────────────────────┐\u001b[0m" },
     { "type": "uptime", "key": "▣ UP : ", "keyColor": "magenta" },
     {
       "type": "command",
@@ -455,7 +457,7 @@ BOXART
       "text": "birth_install=$(stat -c %W /); current=$(date +%s); time_progression=$((current - birth_install)); days_difference=$((time_progression / 86400)); echo $days_difference days"
     },
     { "type": "datetime", "key": "   └⏰ : ", "keyColor": "magenta" },
-    { "type": "custom", "format": "\u001b[97m└────────────────────────────────────────────────────┘\u001b[0m" },
+    { "type": "custom", "format": "\u001b[97m└────────────────────────────────────────────────────────────────────────────────────┘\u001b[0m" },
 
     { "type": "colors", "paddingLeft": 2, "symbol": "circle" }
   ]
