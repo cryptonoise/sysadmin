@@ -16,7 +16,7 @@ safe_read() {
 
 # === Блок 1: Приветствие и инициализация ===
 SCRIPT_NAME="Linux Server Pre-Config"
-SCRIPT_VERSION="1.7.0"
+SCRIPT_VERSION="1.7.3"
 SCRIPT_DESC="Предварительная настройка Linux сервера"
 
 # Метка запуска
@@ -372,12 +372,41 @@ if $FASTFETCH_INSTALLED; then
     printf "• Создаём конфигурацию fastfetch...\n"
     mkdir -p /root/.config/fastfetch
 
+    # --- Логотип: отдельный файл, чтобы fastfetch рисовал его СЛЕВА,
+    # а все модули — отдельной колонкой справа (двухколоночный layout) ---
+    # Важно: \033/\u001b нужно записать РЕАЛЬНЫМ байтом ESC через printf —
+    # heredoc (в отличие от JSON) не раскрывает escape-последовательности.
+    {
+        printf '\033[94m'
+        cat << 'BOXART'
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃ ┏━━━━━━━━━━━━━━━━━━━━━━━━━━┓ ┃
+┃ ┃ ┏━━━━━━━━━━━━━━━━━━━━━━┓ ┃ ┃
+┃ ┃ ┃ ┏━━━━━━━━━━━━━━━━━━┓ ┃ ┃ ┃
+┃ ┃ ┃ ┃ ┏━━━━━━━━━━━━━━┓ ┃ ┃ ┃ ┃
+┃ ┃ ┃ ┃ ┃ ┏━━━━━━━━━━┓ ┃ ┃ ┃ ┃ ┃
+┃ ┃ ┃ ┃ ┃ ┃          ┃ ┃ ┃ ┃ ┃ ┃
+┃ ┃ ┃ ┃ ┃ ┃          ┃ ┃ ┃ ┃ ┃ ┃
+┃ ┃ ┃ ┃ ┃ ┃          ┃ ┃ ┃ ┃ ┃ ┃
+┃ ┃ ┃ ┃ ┃ ┗━━━━━━━━━━┛ ┃ ┃ ┃ ┃ ┃
+┃ ┃ ┃ ┃ ┗━━━━━━━━━━━━━━┛ ┃ ┃ ┃ ┃
+┃ ┃ ┃ ┗━━━━━━━━━━━━━━━━━━┛ ┃ ┃ ┃
+┃ ┃ ┗━━━━━━━━━━━━━━━━━━━━━━┛ ┃ ┃
+┃ ┗━━━━━━━━━━━━━━━━━━━━━━━━━━┛ ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+BOXART
+        printf '\033[0m\n'
+    } > /root/.config/fastfetch/logo.txt
+    printf "✅  Файл логотипа создан: /root/.config/fastfetch/logo.txt\n"
+
     # --- Вставляем ваш рабочий конфиг fastfetch (с большим рекурсивным логотипом)
     cat > /root/.config/fastfetch/config.jsonc << 'FFCONFIG'
 {
   "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/json_schema.json",
   "logo": {
-    "type": "none"
+    "type": "file",
+    "source": "/root/.config/fastfetch/logo.txt",
+    "padding": { "top": 1, "left": 2, "right": 4 }
   },
   "display": {
     "color": { "keys": "blue", "title": "bright_magenta", "separator": "white" }
@@ -386,11 +415,6 @@ if $FASTFETCH_INSTALLED; then
     {
       "type": "title",
       "color": { "user": "bright_magenta", "at": "white", "host": "blue" }
-    },
-
-    {
-      "type": "custom",
-      "format": "\u001b[94m┏━━━━━━━━━━━━━━━━━━━━┓\n┃ ┏━━━━━━━━━━━━━━━━┓ ┃\n┃ ┃ ┏━━━━━━━━━━━━┓ ┃ ┃\n┃ ┃ ┃ ┏━━━━━━━━┓ ┃ ┃ ┃\n┃ ┃ ┃ ┃        ┃ ┃ ┃ ┃\n┃ ┃ ┃ ┗━━━━━━━━┛ ┃ ┃ ┃\n┃ ┃ ┗━━━━━━━━━━━━┛ ┃ ┃\n┃ ┗━━━━━━━━━━━━━━━━┛ ┃\n┗━━━━━━━━━━━━━━━━━━━━┛\u001b[0m"
     },
 
     { "type": "custom", "format": "\u001b[97m┌──────────────────────Hardware──────────────────────┐\u001b[0m" },
@@ -412,21 +436,6 @@ if $FASTFETCH_INSTALLED; then
     { "type": "packages", "key": "   ├▢ : ", "keyColor": "yellow" },
     { "type": "shell", "key": "   ├▢ : ", "keyColor": "yellow" },
     { "type": "locale", "key": "   └▢ : ", "keyColor": "yellow" },
-    { "type": "custom", "format": "\u001b[97m└────────────────────────────────────────────────────┘\u001b[0m" },
-
-    "break",
-
-    { "type": "custom", "format": "\u001b[97m┌──────────────────────Desktop───────────────────────┐\u001b[0m" },
-    { "type": "de", "key": "▣ DE : ", "keyColor": "blue" },
-    { "type": "lm", "key": "   ├▢ : ", "keyColor": "blue" },
-    { "type": "wm", "key": "   ├▢ : ", "keyColor": "blue" },
-    { "type": "wmtheme", "key": "   ├▢ : ", "keyColor": "blue" },
-    { "type": "theme", "key": "   ├▢ : ", "keyColor": "blue" },
-    { "type": "icons", "key": "   ├▢ : ", "keyColor": "blue" },
-    { "type": "font", "key": "   ├▢ : ", "keyColor": "blue" },
-    { "type": "cursor", "key": "   ├▢ : ", "keyColor": "blue" },
-    { "type": "terminal", "key": "   ├▢ : ", "keyColor": "blue" },
-    { "type": "terminalfont", "key": "   └▢ : ", "keyColor": "blue" },
     { "type": "custom", "format": "\u001b[97m└────────────────────────────────────────────────────┘\u001b[0m" },
 
     "break",
