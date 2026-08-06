@@ -32,6 +32,16 @@ printf "  Версия: %s\n" "$SCRIPT_VERSION"
 printf "  %s\n" "$SCRIPT_DESC"
 printf "════════════════════════════════════════════\n"
 
+if [ -f "$MARKER_FILE" ]; then
+    printf "\n⚠️  Обнаружена метка предыдущего запуска этого скрипта:\n"
+    sed 's/^/     /' "$MARKER_FILE" > /dev/tty
+    safe_read $'\nСкрипт уже был запущен ранее. Продолжить повторный запуск? (y/N): ' rerun_choice
+    if [[ ! "$rerun_choice" =~ ^[Yy]$ ]]; then
+        printf "⏹  Отменено пользователем.\n"
+        exit 0
+    fi
+fi
+
 printf "\nНажмите Enter чтобы начать..."
 safe_read "" DUMMY_INPUT
 
@@ -77,20 +87,38 @@ printf "✅  Система успешно обновлена!\n\n"
 # === Блок 4: Установка необходимых утилит ===
 printf "📦  Установка полезных утилит...\n"
 echo "──────────────────────────────────────"
-PACKAGES=("unattended-upgrades" "fail2ban" "htop" "iotop" "nethogs" "curl" "wget" "git" "cron" "rg")
+PACKAGES=("unattended-upgrades" "fail2ban" "htop" "iotop" "nethogs" "curl" "wget" "git" "cron" "ripgrep")
 
+MISSING_PACKAGES=()
 for pkg in "${PACKAGES[@]}"; do
     if ! dpkg -s "$pkg" &>/dev/null; then
-        echo "• Устанавливаем $pkg..."
-        apt-get install -y --no-install-recommends "$pkg"
+        MISSING_PACKAGES+=("$pkg")
     else
         echo "• Пакет $pkg уже установлен"
     fi
 done
 
-printf "• Включаем и запускаем fail2ban...\n"
+if [ "${#MISSING_PACKAGES[@]}" -gt 0 ]; then
+    echo "• Устанавливаем: ${MISSING_PACKAGES[*]}"
+    apt-get install -y --no-install-recommends "${MISSING_PACKAGES[@]}"
+fi
+
+printf "• Настраиваем и запускаем fail2ban...\n"
+# jail.conf по умолчанию не включает jail [sshd] (enabled=false) — без jail.local
+# fail2ban формально работает, но никого не банит. Порт здесь пока дефолтный,
+# после смены SSH-порта в блоке 5 конфиг будет обновлён на актуальный.
+mkdir -p /etc/fail2ban
+cat > /etc/fail2ban/jail.local << 'F2BEOF'
+[sshd]
+enabled = true
+port = 1119
+backend = systemd
+maxretry = 5
+bantime = 1h
+findtime = 10m
+F2BEOF
 systemctl enable fail2ban >/dev/null 2>&1 || true
-systemctl start fail2ban >/dev/null 2>&1 || true
+systemctl restart fail2ban >/dev/null 2>&1 || true
 
 printf "• Включаем и запускаем cron...\n"
 systemctl enable cron >/dev/null 2>&1 || true
@@ -173,6 +201,8 @@ if [ "$SKIP_SSH_SETUP" = false ]; then
     # 3. Применение настроек SSH
     if [[ -f "$SSH_CONFIG" ]]; then
         cp "$SSH_CONFIG" "${SSH_CONFIG}.bak.$(date +%s)"
+        # Держим только последние 5 бэкапов, старые удаляем
+        ls -1t ${SSH_CONFIG}.bak.* 2>/dev/null | tail -n +6 | xargs -r rm -f
         
         if grep -q "^#Port" "$SSH_CONFIG" || grep -q "^Port" "$SSH_CONFIG"; then
             sed -i "s/^#\?Port.*/Port $SSH_PORT/" "$SSH_CONFIG"
@@ -180,7 +210,7 @@ if [ "$SKIP_SSH_SETUP" = false ]; then
             echo "Port $SSH_PORT" >> "$SSH_CONFIG"
         fi
         
-        sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' "$SSH_CONFIG"
+        sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' "$SSH_CONFIG"
         sed -i 's/^#\?PubkeyAuthentication.*/PubkeyAuthentication yes/' "$SSH_CONFIG"
         sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication no/' "$SSH_CONFIG"
         sed -i 's/^#\?UseDNS.*/UseDNS no/' "$SSH_CONFIG"
@@ -203,6 +233,19 @@ if [ "$SKIP_SSH_SETUP" = false ]; then
             SSH_SERVICE="sshd"
         fi
         
+        # Обновляем порт в fail2ban под реальный выбранный SSH-порт
+        if [ -f /etc/fail2ban/jail.local ]; then
+            sed -i "s/^port = .*/port = $SSH_PORT/" /etc/fail2ban/jail.local
+            systemctl restart fail2ban >/dev/null 2>&1 || true
+        fi
+
+        # Открываем новый SSH-порт в ufw, если он установлен (чтобы не потерять доступ,
+        # если ufw будет включён позже без учёта нестандартного порта)
+        if command -v ufw &>/dev/null; then
+            ufw allow "${SSH_PORT}/tcp" comment 'SSH (preServer)' >/dev/null 2>&1 || true
+            printf "• Порт %s открыт в ufw (правило добавлено, сам ufw не включается автоматически)\n" "$SSH_PORT"
+        fi
+
         mkdir -p /run/sshd
         if sshd -t; then
             if systemctl restart "$SSH_SERVICE" 2>/dev/null; then
@@ -334,11 +377,7 @@ if $FASTFETCH_INSTALLED; then
 {
   "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/json_schema.json",
   "logo": {
-    "source": "arch",
-    "color": { "1": "blue", "2": "dim_blue" },
-    "height": 15,
-    "width": 30,
-    "padding": { "top": 10, "left": 10, "right": 0 }
+    "type": "none"
   },
   "display": {
     "color": { "keys": "blue", "title": "bright_magenta", "separator": "white" }
@@ -360,8 +399,8 @@ if $FASTFETCH_INSTALLED; then
     { "type": "gpu", "key": "   ├▢ : ", "keyColor": "green" },
     { "type": "memory", "key": "   ├▢ : ", "keyColor": "green" },
     { "type": "disk", "key": "   ├▢ : ", "keyColor": "green" },
-    { "type": "battery", "key": "   └▢ : ", "keyColor": "green" },
-    { "type": "poweradapter", "key": "└ └▢ : ", "keyColor": "green" },
+    { "type": "battery", "key": "   ├▢ : ", "keyColor": "green" },
+    { "type": "poweradapter", "key": "   └▢ : ", "keyColor": "green" },
     { "type": "custom", "format": "\u001b[97m└────────────────────────────────────────────────────┘\u001b[0m" },
 
     "break",
@@ -383,11 +422,11 @@ if $FASTFETCH_INSTALLED; then
     { "type": "wm", "key": "   ├▢ : ", "keyColor": "blue" },
     { "type": "wmtheme", "key": "   ├▢ : ", "keyColor": "blue" },
     { "type": "theme", "key": "   ├▢ : ", "keyColor": "blue" },
-    { "type": "icons", "key": "   ├◧ : ", "keyColor": "blue" },
-    { "type": "font", "key": "   ├▣ : ", "keyColor": "blue" },
-    { "type": "cursor", "key": "   ├◨ : ", "keyColor": "blue" },
-    { "type": "terminal", "key": "   ├◩ : ", "keyColor": "blue" },
-    { "type": "terminalfont", "key": "   └▣ : ", "keyColor": "blue" },
+    { "type": "icons", "key": "   ├▢ : ", "keyColor": "blue" },
+    { "type": "font", "key": "   ├▢ : ", "keyColor": "blue" },
+    { "type": "cursor", "key": "   ├▢ : ", "keyColor": "blue" },
+    { "type": "terminal", "key": "   ├▢ : ", "keyColor": "blue" },
+    { "type": "terminalfont", "key": "   └▢ : ", "keyColor": "blue" },
     { "type": "custom", "format": "\u001b[97m└────────────────────────────────────────────────────┘\u001b[0m" },
 
     "break",
