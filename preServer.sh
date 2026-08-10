@@ -424,7 +424,7 @@ ASCII_LOGO
         "break",
         { "type": "custom", "format": "\u001b[97m┌───────────────────────────────────────Network──────────────────────────────────────┐\u001b[0m" },
         { "type": "localip", "key": "▣ IP : ", "keyColor": "cyan" },
-        { "type": "command", "key": "   └▢ Loc: ", "keyColor": "cyan", "text": "curl -s --max-time 2 https://ipinfo.io/city" },
+        { "type": "command", "key": "   └▢ Location: ", "keyColor": "cyan", "text": "curl -s --max-time 2 https://ipinfo.io/city" },
         { "type": "custom", "format": "\u001b[97m└────────────────────────────────────────────────────────────────────────────────────┘\u001b[0m" },
         "break",
         { "type": "uptime", "key": "▣ UP : ", "keyColor": "magenta" },
