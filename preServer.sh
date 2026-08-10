@@ -16,7 +16,7 @@ safe_read() {
 
 # === Блок 1: Приветствие и инициализация ===
 SCRIPT_NAME="Linux Server Pre-Config"
-SCRIPT_VERSION="1.9.0"
+SCRIPT_VERSION="1.9.1"
 SCRIPT_DESC="Предварительная настройка Linux сервера"
 
 # Метка запуска
@@ -42,6 +42,22 @@ neutralize_sshd_dropins() {
         [ "$(basename "$f")" = "99-preserver.conf" ] && continue
         sed -i -E 's/^[[:space:]]*(Port|PermitRootLogin|PasswordAuthentication|PubkeyAuthentication)\b/# [preServer disabled] \1/' "$f"
     done
+}
+
+# Многие облачные образы Ubuntu (22.04+/24.04) используют systemd socket activation для SSH:
+# юнит ssh.socket слушает порт, ЖЁСТКО прописанный в его unit-файле (обычно 22), независимо
+# от значения Port в /etc/ssh/sshd_config. В этом режиме простой "systemctl restart ssh/sshd"
+# НЕ меняет реально прослушиваемый порт — старый сокет остаётся открытым до перезагрузки
+# (или до ручной правки ssh.socket). Поэтому переводим систему на классический режим,
+# при котором sshd сам слушает порт из sshd_config — смена порта тогда применяется сразу.
+disable_ssh_socket_activation() {
+    if systemctl list-unit-files 2>/dev/null | grep -q '^ssh\.socket'; then
+        if systemctl is-enabled ssh.socket &>/dev/null || systemctl is-active ssh.socket &>/dev/null; then
+            systemctl stop ssh.socket >/dev/null 2>&1 || true
+            systemctl disable ssh.socket >/dev/null 2>&1 || true
+            printf "ℹ️  Обнаружена socket activation (ssh.socket) — отключена, чтобы смена порта применялась без перезагрузки.\n"
+        fi
+    fi
 }
 
 # Проверяем, что итоговые (effective) значения sshd реально совпадают с тем, что мы хотели.
@@ -70,7 +86,9 @@ verify_and_restart_sshd() {
     local svc="ssh"
     systemctl list-unit-files | grep -q "sshd.service" && svc="sshd"
     mkdir -p /run/sshd
+    disable_ssh_socket_activation
     if sshd -t; then
+        systemctl enable "$svc" >/dev/null 2>&1 || true
         systemctl restart "$svc" 2>/dev/null || systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || true
         printf "✅  sshd перезапущен, эффективный конфиг подтверждён (port=%s pwauth=%s rootlogin=%s).\n" "$eff_port" "$eff_pwauth" "$eff_rootlogin"
         return 0
@@ -498,7 +516,10 @@ if $FASTFETCH_INSTALLED; then
 ┃ ┃ ┃ ┃ ┃ ┃          ┃ ┃ ┃ ┃ ┃ ┃
 BOXART_TOP
         # Средняя строка с двумя зелёными точками-статусами (●|● = скрипт настройки отработал)
-        printf '┃ ┃ ┃ ┃ ┃ ┃  \033[92m●\033[94m|\033[92m●\033[94m   ┃ ┃ ┃ ┃ ┃ ┃\n'
+        # ВАЖНО: видимая (без учёта ANSI-кодов цвета) длина строки должна совпадать с остальными
+        # строками рамки (32 символа), иначе правая часть рисунка "съезжает" — раньше здесь
+        # не хватало 2 пробелов.
+        printf '┃ ┃ ┃ ┃ ┃ ┃   \033[92m●\033[94m|\033[92m●\033[94m    ┃ ┃ ┃ ┃ ┃ ┃\n'
         cat << 'BOXART_BOTTOM'
 ┃ ┃ ┃ ┃ ┃ ┃          ┃ ┃ ┃ ┃ ┃ ┃
 ┃ ┃ ┃ ┃ ┃ ┗━━━━━━━━━━┛ ┃ ┃ ┃ ┃ ┃
