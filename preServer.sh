@@ -16,7 +16,7 @@ safe_read() {
 
 # === Блок 1: Приветствие и инициализация ===
 SCRIPT_NAME="Linux Server Pre-Config"
-SCRIPT_VERSION="1.9.1"
+SCRIPT_VERSION="1.9.2"
 SCRIPT_DESC="Предварительная настройка Linux сервера"
 
 # Метка запуска
@@ -55,6 +55,7 @@ disable_ssh_socket_activation() {
         if systemctl is-enabled ssh.socket &>/dev/null || systemctl is-active ssh.socket &>/dev/null; then
             systemctl stop ssh.socket >/dev/null 2>&1 || true
             systemctl disable ssh.socket >/dev/null 2>&1 || true
+            systemctl daemon-reload >/dev/null 2>&1 || true
             printf "ℹ️  Обнаружена socket activation (ssh.socket) — отключена, чтобы смена порта применялась без перезагрузки.\n"
         fi
     fi
@@ -84,13 +85,21 @@ verify_and_restart_sshd() {
     fi
 
     local svc="ssh"
-    systemctl list-unit-files | grep -q "sshd.service" && svc="sshd"
+    systemctl list-unit-files | grep -q "^sshd\.service" && svc="sshd"
     mkdir -p /run/sshd
+    
+    # Перед перезапуском сервиса обязательно гасим сокет и обновляем демон,
+    # иначе порт может не освободиться или примениться только после ребута.
     disable_ssh_socket_activation
+    
     if sshd -t; then
+        systemctl daemon-reload >/dev/null 2>&1 || true
         systemctl enable "$svc" >/dev/null 2>&1 || true
-        systemctl restart "$svc" 2>/dev/null || systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || true
-        printf "✅  sshd перезапущен, эффективный конфиг подтверждён (port=%s pwauth=%s rootlogin=%s).\n" "$eff_port" "$eff_pwauth" "$eff_rootlogin"
+        # Пробуем остановить и запустить заново для чистоты
+        systemctl stop "$svc" 2>/dev/null || true
+        systemctl start "$svc" 2>/dev/null || systemctl start ssh 2>/dev/null || systemctl start sshd 2>/dev/null || true
+        
+        printf "✅  SSH сервис перезапущен, эффективный конфиг подтверждён (port=%s pwauth=%s rootlogin=%s).\n" "$eff_port" "$eff_pwauth" "$eff_rootlogin"
         return 0
     else
         printf "❌  sshd -t: синтаксическая ошибка, перезапуск отменён.\n"
@@ -515,11 +524,11 @@ if $FASTFETCH_INSTALLED; then
 ┃ ┃ ┃ ┃ ┃ ┏━━━━━━━━━━┓ ┃ ┃ ┃ ┃ ┃
 ┃ ┃ ┃ ┃ ┃ ┃          ┃ ┃ ┃ ┃ ┃ ┃
 BOXART_TOP
-        # Средняя строка с двумя зелёными точками-статусами (●|● = скрипт настройки отработал)
-        # ВАЖНО: видимая (без учёта ANSI-кодов цвета) длина строки должна совпадать с остальными
-        # строками рамки (32 символа), иначе правая часть рисунка "съезжает" — раньше здесь
-        # не хватало 2 пробелов.
-        printf '┃ ┃ ┃ ┃ ┃ ┃   \033[92m●\033[94m|\033[92m●\033[94m    ┃ ┃ ┃ ┃ ┃ ┃\n'
+        # Средняя строка с двумя зелёными точками-статусами (● | ● = скрипт настройки отработал)
+        # ВАЖНО: видимая (без учёта ANSI-кодов цвета) длина строки должна быть ровно 32 символа.
+        # Используем • (bullet) вместо ● (circle), так как он чаще имеет ширину в 1 символ в разных терминалах.
+        # Формула: 11 (левые плашки) + 2 (пробела) + 5 (символы '• | •') + 3 (пробела) + 11 (правые плашки) = 32.
+        printf '┃ ┃ ┃ ┃ ┃ ┃  \033[92m•\033[94m | \033[92m•\033[94m   ┃ ┃ ┃ ┃ ┃ ┃\n'
         cat << 'BOXART_BOTTOM'
 ┃ ┃ ┃ ┃ ┃ ┃          ┃ ┃ ┃ ┃ ┃ ┃
 ┃ ┃ ┃ ┃ ┃ ┗━━━━━━━━━━┛ ┃ ┃ ┃ ┃ ┃
