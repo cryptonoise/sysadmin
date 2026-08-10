@@ -16,7 +16,7 @@ safe_read() {
 
 # === Блок 1: Приветствие и инициализация ===
 SCRIPT_NAME="Linux Server Pre-Config"
-SCRIPT_VERSION="1.7.0"
+SCRIPT_VERSION="1.8.0"
 SCRIPT_DESC="Предварительная настройка Linux сервера"
 
 # Метка запуска
@@ -51,6 +51,9 @@ export DEBIAN_FRONTEND=noninteractive
 export NEEDRESTART_MODE=a
 export NEEDRESTART_SUSPEND=1
 export APT_LISTCHANGES_FRONTEND=none
+# Подавляем SyntaxWarning от python-скриптов пакетов (например fail2ban),
+# которые байткомпилируются при установке и засоряют вывод
+export PYTHONWARNINGS="ignore::SyntaxWarning"
 
 # === Блок 2: Проверка и восстановление dpkg при сбоях ===
 printf "🔧  Проверка целостности пакетной базы...\n"
@@ -387,8 +390,8 @@ if $FASTFETCH_INSTALLED; then
 ┃ ┃ ┃ ┃ ┃ ┏━━━━━━━━━━┓ ┃ ┃ ┃ ┃ ┃
 ┃ ┃ ┃ ┃ ┃ ┃          ┃ ┃ ┃ ┃ ┃ ┃
 BOXART_TOP
-        # Средняя строка с зелёной точкой-статусом (● = скрипт настройки отработал)
-        printf '┃ ┃ ┃ ┃ ┃ ┃    \033[92m●\033[94m     ┃ ┃ ┃ ┃ ┃ ┃\n'
+        # Средняя строка с двумя зелёными точками-статусами (● ● = скрипт настройки отработал)
+        printf '┃ ┃ ┃ ┃ ┃ ┃  \033[92m●   ●\033[94m   ┃ ┃ ┃ ┃ ┃ ┃\n'
         cat << 'BOXART_BOTTOM'
 ┃ ┃ ┃ ┃ ┃ ┃          ┃ ┃ ┃ ┃ ┃ ┃
 ┃ ┃ ┃ ┃ ┃ ┗━━━━━━━━━━┛ ┃ ┃ ┃ ┃ ┃
