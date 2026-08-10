@@ -16,7 +16,7 @@ safe_read() {
 
 # === Блок 1: Приветствие и инициализация ===
 SCRIPT_NAME="Linux Server Pre-Config"
-SCRIPT_VERSION="1.9.0"
+SCRIPT_VERSION="1.8.1"
 SCRIPT_DESC="Предварительная настройка Linux сервера"
 
 # Метка запуска
@@ -45,9 +45,17 @@ rollback_preserver() {
     if [ -f "$SSHD_CFG" ]; then
         cp "$SSHD_CFG" "${SSHD_CFG}.bak.$(date +%s)"
         sed -i "s/^#\?Port.*/Port 22/" "$SSHD_CFG"
+        sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' "$SSHD_CFG"
         sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' "$SSHD_CFG"
         sed -i 's/^#\?PrintMotd.*/PrintMotd yes/' "$SSHD_CFG"
         sed -i 's/^#\?PrintLastLog.*/PrintLastLog yes/' "$SSHD_CFG"
+
+        # Если у root нет пароля (типично для VPS-образов с доступом только по ключу),
+        # PasswordAuthentication yes не поможет — аккаунт остаётся заблокирован.
+        if passwd -S root 2>/dev/null | awk '{print $2}' | grep -qE '^(L|LK|NP)$'; then
+            printf "⚠️  У root не задан пароль (аккаунт заблокирован/без пароля).\n"
+            printf "    Вход по паролю не заработает, пока вы не установите пароль: passwd root\n"
+        fi
 
         SSH_SERVICE_RB="ssh"
         if systemctl list-unit-files | grep -q "sshd.service"; then
