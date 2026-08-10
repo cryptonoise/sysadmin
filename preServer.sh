@@ -16,7 +16,7 @@ safe_read() {
 
 # === Блок 1: Приветствие и инициализация ===
 SCRIPT_NAME="Linux Server Pre-Config"
-SCRIPT_VERSION="1.8.0"
+SCRIPT_VERSION="1.7.0"
 SCRIPT_DESC="Предварительная настройка Linux сервера"
 
 # Метка запуска
@@ -32,11 +32,86 @@ printf "  Версия: %s\n" "$SCRIPT_VERSION"
 printf "  %s\n" "$SCRIPT_DESC"
 printf "════════════════════════════════════════════\n"
 
+# Функция отката настроек, сделанных этим скриптом.
+# Софт (htop, iotop, nethogs, curl, wget, git, cron, ripgrep, unattended-upgrades)
+# НЕ удаляется — трогаем только то, что специфично для этого скрипта.
+rollback_preserver() {
+    local SSHD_CFG="/etc/ssh/sshd_config"
+
+    printf "\n♻️   Откат настроек preServer...\n"
+    echo "──────────────────────────────────────"
+
+    # 1. SSH: порт обратно на 22, пароль обратно разрешаем
+    if [ -f "$SSHD_CFG" ]; then
+        cp "$SSHD_CFG" "${SSHD_CFG}.bak.$(date +%s)"
+        sed -i "s/^#\?Port.*/Port 22/" "$SSHD_CFG"
+        sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' "$SSHD_CFG"
+        sed -i 's/^#\?PrintMotd.*/PrintMotd yes/' "$SSHD_CFG"
+        sed -i 's/^#\?PrintLastLog.*/PrintLastLog yes/' "$SSHD_CFG"
+
+        SSH_SERVICE_RB="ssh"
+        if systemctl list-unit-files | grep -q "sshd.service"; then
+            SSH_SERVICE_RB="sshd"
+        fi
+        mkdir -p /run/sshd
+        if sshd -t; then
+            systemctl restart "$SSH_SERVICE_RB" 2>/dev/null || systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || true
+            printf "✅  SSH возвращён на порт 22, вход по паролю разрешён.\n"
+        else
+            printf "⚠️  Конфигурация SSH некорректна после отката — проверьте %s вручную.\n" "$SSHD_CFG"
+        fi
+
+        if command -v ufw &>/dev/null; then
+            ufw allow 22/tcp comment 'SSH (preServer rollback)' >/dev/null 2>&1 || true
+        fi
+    fi
+
+    # 2. Удаляем fail2ban
+    if dpkg -s fail2ban &>/dev/null; then
+        systemctl stop fail2ban >/dev/null 2>&1 || true
+        systemctl disable fail2ban >/dev/null 2>&1 || true
+        apt-get purge -y fail2ban >/dev/null 2>&1 || true
+        rm -f /etc/fail2ban/jail.local
+        printf "✅  fail2ban удалён.\n"
+    else
+        printf "ℹ️  fail2ban не установлен, пропуск.\n"
+    fi
+
+    # 3. Удаляем Fastfetch и его конфиги
+    if dpkg -s fastfetch &>/dev/null; then
+        apt-get purge -y fastfetch >/dev/null 2>&1 || true
+        printf "✅  Fastfetch удалён (apt).\n"
+    elif command -v fastfetch &>/dev/null; then
+        rm -f "$(command -v fastfetch)"
+        printf "✅  Fastfetch удалён (бинарник).\n"
+    else
+        printf "ℹ️  Fastfetch не установлен, пропуск.\n"
+    fi
+    rm -rf /root/.config/fastfetch
+    rm -f /etc/profile.d/fastfetch-ssh.sh
+    if [ -d /etc/update-motd.d ]; then
+        chmod +x /etc/update-motd.d/* 2>/dev/null || true
+    fi
+
+    # 4. Удаляем скрипт автообновления и его cron-задачу
+    rm -f /usr/local/sbin/daily-security-update.sh
+    rm -f /etc/cron.d/daily-security-update
+    printf "✅  Скрипт автообновления и его cron-задача удалены.\n"
+
+    # 5. Удаляем метку запуска
+    rm -f "$MARKER_FILE"
+
+    printf "\n✅  Откат завершён. Остальной софт (htop, iotop, nethogs, git, ripgrep и т.д.) оставлен без изменений.\n\n"
+}
+
 if [ -f "$MARKER_FILE" ]; then
     printf "\n⚠️  Обнаружена метка предыдущего запуска этого скрипта:\n"
     sed 's/^/     /' "$MARKER_FILE" > /dev/tty
-    safe_read $'\nСкрипт уже был запущен ранее. Продолжить повторный запуск? (y/N): ' rerun_choice
-    if [[ ! "$rerun_choice" =~ ^[Yy]$ ]]; then
+    safe_read $'\nВыполнить откат настроек (SSH → порт 22 + пароль, удалить fail2ban и Fastfetch, удалить автообновления)? (y/N): ' rerun_choice
+    if [[ "$rerun_choice" =~ ^[Yy]$ ]]; then
+        rollback_preserver
+        exit 0
+    else
         printf "⏹  Отменено пользователем.\n"
         exit 0
     fi
@@ -141,14 +216,9 @@ SKIP_SSH_SETUP=false
 # Если порт по умолчанию (1119) уже занят, предложим пропустить настройку SSH полностью
 if command -v ss &>/dev/null; then
     if ss -tuln | grep -q ":${DEFAULT_PORT} "; then
-        safe_read "Порт ${DEFAULT_PORT} уже занят. Пропустить настройку SSH полностью? (y/N): " skip_choice
-        if [[ "$skip_choice" =~ ^[Yy]$ ]]; then
-            SKIP_SSH_SETUP=true
-            SSH_PORT="skipped"
-            printf "⚠️  Пропуск настройки SSH по запросу пользователя (порт %s занят).\n\n" "$DEFAULT_PORT"
-        else
-            printf "ℹ️  Продолжаем с интерактивной настройкой SSH.\n\n"
-        fi
+        SKIP_SSH_SETUP=true
+        SSH_PORT="skipped"
+        printf "⚠️  Порт %s уже используется — настройка SSH (смена порта и добавление ключа) автоматически пропущена.\n\n" "$DEFAULT_PORT"
     fi
 fi
 
@@ -390,8 +460,8 @@ if $FASTFETCH_INSTALLED; then
 ┃ ┃ ┃ ┃ ┃ ┏━━━━━━━━━━┓ ┃ ┃ ┃ ┃ ┃
 ┃ ┃ ┃ ┃ ┃ ┃          ┃ ┃ ┃ ┃ ┃ ┃
 BOXART_TOP
-        # Средняя строка с двумя зелёными точками-статусами (● ● = скрипт настройки отработал)
-        printf '┃ ┃ ┃ ┃ ┃ ┃  \033[92m●   ●\033[94m   ┃ ┃ ┃ ┃ ┃ ┃\n'
+        # Средняя строка с двумя зелёными точками-статусами (●|● = скрипт настройки отработал)
+        printf '┃ ┃ ┃ ┃ ┃ ┃  \033[92m●\033[94m|\033[92m●\033[94m   ┃ ┃ ┃ ┃ ┃ ┃\n'
         cat << 'BOXART_BOTTOM'
 ┃ ┃ ┃ ┃ ┃ ┃          ┃ ┃ ┃ ┃ ┃ ┃
 ┃ ┃ ┃ ┃ ┃ ┗━━━━━━━━━━┛ ┃ ┃ ┃ ┃ ┃
@@ -420,33 +490,38 @@ BOXART_BOTTOM
   "modules": [
     { "type": "custom", "format": "\u001b[97m┌──────────────────────────────────────Hardware──────────────────────────────────────┐\u001b[0m" },
     { "type": "host", "key": "▣ PC : ", "keyColor": "green" },
-    { "type": "cpu", "key": "   ├▢ : ", "keyColor": "green" },
-    { "type": "cpuusage", "key": "   ├▢ : ", "keyColor": "green" },
-    { "type": "loadavg", "key": "   ├▢ : ", "keyColor": "green" },
-    { "type": "gpu", "key": "   ├▢ : ", "keyColor": "green" },
-    { "type": "memory", "key": "   ├▢ : ", "keyColor": "green" },
-    { "type": "swap", "key": "   ├▢ : ", "keyColor": "green" },
-    { "type": "disk", "key": "   ├▢ : ", "keyColor": "green" },
-    { "type": "battery", "key": "   ├▢ : ", "keyColor": "green" },
-    { "type": "poweradapter", "key": "   └▢ : ", "keyColor": "green" },
+    { "type": "cpu", "key": "   ├▢ CPU: ", "keyColor": "green" },
+    { "type": "cpuusage", "key": "   ├▢ Usage: ", "keyColor": "green" },
+    { "type": "loadavg", "key": "   ├▢ Load: ", "keyColor": "green" },
+    { "type": "gpu", "key": "   ├▢ GPU: ", "keyColor": "green" },
+    { "type": "memory", "key": "   ├▢ RAM: ", "keyColor": "green" },
+    { "type": "swap", "key": "   ├▢ Swap: ", "keyColor": "green" },
+    { "type": "disk", "key": "   ├▢ Disk: ", "keyColor": "green" },
+    { "type": "battery", "key": "   ├▢ Battery: ", "keyColor": "green" },
+    { "type": "poweradapter", "key": "   └▢ Power: ", "keyColor": "green" },
     { "type": "custom", "format": "\u001b[97m└────────────────────────────────────────────────────────────────────────────────────┘\u001b[0m" },
 
     "break",
 
     { "type": "custom", "format": "\u001b[97m┌──────────────────────────────────────Software──────────────────────────────────────┐\u001b[0m" },
     { "type": "os", "key": "▣ OS : ", "keyColor": "yellow" },
-    { "type": "kernel", "key": "   ├▢ : ", "keyColor": "yellow" },
-    { "type": "bios", "key": "   ├▢ : ", "keyColor": "yellow" },
-    { "type": "packages", "key": "   ├▢ : ", "keyColor": "yellow" },
-    { "type": "shell", "key": "   ├▢ : ", "keyColor": "yellow" },
-    { "type": "locale", "key": "   └▢ : ", "keyColor": "yellow" },
+    { "type": "kernel", "key": "   ├▢ Kernel: ", "keyColor": "yellow" },
+    { "type": "bios", "key": "   ├▢ BIOS: ", "keyColor": "yellow" },
+    { "type": "packages", "key": "   ├▢ Packages: ", "keyColor": "yellow" },
+    { "type": "shell", "key": "   ├▢ Shell: ", "keyColor": "yellow" },
+    { "type": "locale", "key": "   └▢ Locale: ", "keyColor": "yellow" },
     { "type": "custom", "format": "\u001b[97m└────────────────────────────────────────────────────────────────────────────────────┘\u001b[0m" },
 
     "break",
 
     { "type": "custom", "format": "\u001b[97m┌───────────────────────────────────────Network──────────────────────────────────────┐\u001b[0m" },
     { "type": "localip", "key": "▣ IP : ", "keyColor": "cyan" },
-    { "type": "publicip", "key": "   └▢ : ", "keyColor": "cyan", "timeout": 1000 },
+    {
+      "type": "command",
+      "key": "   └▢ Location: ",
+      "keyColor": "cyan",
+      "text": "city=$(curl -s --max-time 2 https://ipinfo.io/city); country=$(curl -s --max-time 2 https://ipinfo.io/country); if [ -n \"$city\" ] || [ -n \"$country\" ]; then echo \"$city, $country\"; else echo unknown; fi"
+    },
     { "type": "custom", "format": "\u001b[97m└────────────────────────────────────────────────────────────────────────────────────┘\u001b[0m" },
 
     "break",
