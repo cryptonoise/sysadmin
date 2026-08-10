@@ -15,7 +15,7 @@ safe_read() {
 
 # === Блок 1: Приветствие и инициализация ===
 SCRIPT_NAME="Linux Server Pre-Config"
-SCRIPT_VERSION="1.9.4"
+SCRIPT_VERSION="1.9.5"
 SCRIPT_DESC="Предварительная настройка Linux сервера"
 
 # Метка запуска
@@ -75,6 +75,7 @@ verify_and_restart_sshd() {
     # иначе sshd завершится с ошибкой "Missing privilege separation directory"
     # и проверка конфигурации провалится даже при корректном sshd_config.
     mkdir -p /run/sshd
+    chmod 0755 /run/sshd
 
     local eff
     eff="$(sshd -T 2>&1)" || {
@@ -111,7 +112,6 @@ verify_and_restart_sshd() {
 
     systemctl enable "$svc" >/dev/null 2>&1 || true
     systemctl restart "$svc" 2>/dev/null || systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || true
-
     printf "✅  sshd перезапущен, эффективный конфиг подтверждён (port=%s pwauth=%s rootlogin=%s).\n" "$eff_port" "$eff_pwauth" "$eff_rootlogin"
     return 0
 }
@@ -177,7 +177,6 @@ rollback_preserver() {
     fi
     rm -rf /root/.config/fastfetch
     rm -f /etc/profile.d/fastfetch-ssh.sh
-
     if [ -d /etc/update-motd.d ]; then
         chmod +x /etc/update-motd.d/* 2>/dev/null || true
     fi
@@ -208,7 +207,6 @@ fi
 
 printf "\nНажмите Enter чтобы начать..."
 safe_read "" DUMMY_INPUT
-
 printf "\n🚀  Начинаю базовую настройку безопасности сервера...\n"
 
 export DEBIAN_FRONTEND=noninteractive
@@ -308,7 +306,6 @@ if [ "$SKIP_SSH_SETUP" = false ]; then
     while true; do
         safe_read "Введите порт SSH (по умолчанию $DEFAULT_PORT): " INPUT_PORT
         SSH_PORT=${INPUT_PORT:-$DEFAULT_PORT}
-
         if ! [[ "$SSH_PORT" =~ ^[0-9]+$ ]]; then
             printf "❌  Ошибка: Порт должен быть числом.\n"
             continue
@@ -376,6 +373,11 @@ if [ "$SKIP_SSH_SETUP" = false ]; then
         fi
 
         printf "• Перезапуск SSH сервиса...\n"
+
+        # КРИТИЧНО: Создаём директорию разделения привилегий ДО проверок
+        # Без этого sshd -t выдаёт "Missing privilege separation directory: /run/sshd"
+        mkdir -p /run/sshd
+        chmod 0755 /run/sshd
 
         # Обновляем порт в fail2ban под реальный выбранный SSH-порт
         if [ -f /etc/fail2ban/jail.local ]; then
@@ -517,6 +519,7 @@ BOXART_TOP
         # Средняя строка с двумя зелёными точками-статусами (●|● = скрипт настройки отработал)
         # ВАЖНО: видимая (без учёта ANSI-кодов цвета) длина строки должна совпадать с остальными
         # строками рамки (32 символа), иначе правая часть рисунка "съезжает".
+        # Центрирование: 3 пробела слева, ●|●, 4 пробела справа = идеально по центру 14-символьного поля
         printf '┃ ┃ ┃ ┃ ┃ ┃   \033[92m●\033[94m|\033[92m●\033[94m    ┃ ┃ ┃ ┃ ┃ ┃\n'
         cat << 'BOXART_BOTTOM'
 ┃ ┃ ┃ ┃ ┃ ┃          ┃ ┃ ┃ ┃ ┃ ┃
@@ -644,7 +647,6 @@ printf "   • Автообновления: Включены (ежедневн�
 if $FASTFETCH_INSTALLED; then
     printf "   • Fastfetch: Установлен (запускается при SSH-входе вместо MOTD)\n"
 fi
-
 printf "\n"
 printf "⚠️  ВАЖНО: Не закрывайте текущее соединение, пока не проверите вход по новому порту в другом окне!\n"
 if [ "$SKIP_SSH_SETUP" = true ]; then
