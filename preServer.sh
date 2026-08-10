@@ -16,7 +16,7 @@ safe_read() {
 
 # === Блок 1: Приветствие и инициализация ===
 SCRIPT_NAME="Linux Server Pre-Config"
-SCRIPT_VERSION="1.9.2"
+SCRIPT_VERSION="1.9.3"
 SCRIPT_DESC="Предварительная настройка Linux сервера"
 
 # Метка запуска
@@ -66,7 +66,15 @@ disable_ssh_socket_activation() {
 verify_and_restart_sshd() {
     local want_port="$1" want_pwauth="$2" want_rootlogin="$3"
     local eff
-    eff="$(sshd -T 2>/dev/null)" || { printf "❌  sshd -T завершился с ошибкой, перезапуск отменён.\n"; return 1; }
+    local sshd_bin
+    sshd_bin=$(command -v sshd || echo "/usr/sbin/sshd")
+
+    # Пробуем получить эффективный конфиг. Если ошибка — выводим её пользователю.
+    eff=$($sshd_bin -T 2>&1) || {
+        printf "❌  Ошибка при проверке конфигурации (sshd -T):\n%s\n" "$eff"
+        printf "    Перезапуск SSH отменён во избежание потери доступа.\n"
+        return 1
+    }
 
     local eff_port eff_pwauth eff_rootlogin
     eff_port=$(awk '/^port /{print $2; exit}' <<< "$eff")
@@ -92,17 +100,24 @@ verify_and_restart_sshd() {
     # иначе порт может не освободиться или примениться только после ребута.
     disable_ssh_socket_activation
     
-    if sshd -t; then
+    if $sshd_bin -t >/dev/null 2>&1; then
         systemctl daemon-reload >/dev/null 2>&1 || true
         systemctl enable "$svc" >/dev/null 2>&1 || true
-        # Пробуем остановить и запустить заново для чистоты
-        systemctl stop "$svc" 2>/dev/null || true
-        systemctl start "$svc" 2>/dev/null || systemctl start ssh 2>/dev/null || systemctl start sshd 2>/dev/null || true
         
-        printf "✅  SSH сервис перезапущен, эффективный конфиг подтверждён (port=%s pwauth=%s rootlogin=%s).\n" "$eff_port" "$eff_pwauth" "$eff_rootlogin"
-        return 0
+        # Для того чтобы порт применился мгновенно и без конфликтов:
+        # 1. Останавливаем сервис и сокет
+        systemctl stop "$svc" ssh.socket sshd.socket 2>/dev/null || true
+        # 2. Запускаем сервис напрямую
+        if systemctl start "$svc" 2>/dev/null || systemctl start ssh 2>/dev/null || systemctl start sshd 2>/dev/null; then
+            printf "✅  SSH сервис перезапущен, эффективный конфиг подтверждён (port=%s pwauth=%s rootlogin=%s).\n" "$eff_port" "$eff_pwauth" "$eff_rootlogin"
+            return 0
+        else
+            printf "❌  Не удалось запустить службу SSH. Проверьте статус: systemctl status %s\n" "$svc"
+            return 1
+        fi
     else
-        printf "❌  sshd -t: синтаксическая ошибка, перезапуск отменён.\n"
+        printf "❌  Ошибка синтаксиса в конфигурации SSH (sshd -t). Перезапуск отменён.\n"
+        $sshd_bin -t 2>&1 || true
         return 1
     fi
 }
