@@ -16,7 +16,7 @@ safe_read() {
 
 # === Блок 1: Приветствие и инициализация ===
 SCRIPT_NAME="Linux Server Pre-Config"
-SCRIPT_VERSION="1.8.1"
+SCRIPT_VERSION="1.7.0"
 SCRIPT_DESC="Предварительная настройка Linux сервера"
 
 # Метка запуска
@@ -32,23 +32,73 @@ printf "  Версия: %s\n" "$SCRIPT_VERSION"
 printf "  %s\n" "$SCRIPT_DESC"
 printf "════════════════════════════════════════════\n"
 
+# Убираем противоречащие настройки в drop-in конфигах (/etc/ssh/sshd_config.d/*.conf),
+# т.к. Include стоит в начале sshd_config и sshd берёт ПЕРВОЕ встреченное значение —
+# правки в основном файле иначе могут молча игнорироваться (частая причина потери доступа).
+neutralize_sshd_dropins() {
+    local f
+    for f in /etc/ssh/sshd_config.d/*.conf; do
+        [ -f "$f" ] || continue
+        [ "$(basename "$f")" = "99-preserver.conf" ] && continue
+        sed -i -E 's/^[[:space:]]*(Port|PermitRootLogin|PasswordAuthentication|PubkeyAuthentication)\b/# [preServer disabled] \1/' "$f"
+    done
+}
+
+# Проверяем, что итоговые (effective) значения sshd реально совпадают с тем, что мы хотели.
+# Если нет — НЕ перезапускаем sshd, чтобы не потерять доступ.
+verify_and_restart_sshd() {
+    local want_port="$1" want_pwauth="$2" want_rootlogin="$3"
+    local eff
+    eff="$(sshd -T 2>/dev/null)" || { printf "❌  sshd -T завершился с ошибкой, перезапуск отменён.\n"; return 1; }
+
+    local eff_port eff_pwauth eff_rootlogin
+    eff_port=$(awk '/^port /{print $2; exit}' <<< "$eff")
+    eff_pwauth=$(awk '/^passwordauthentication /{print $2; exit}' <<< "$eff")
+    eff_rootlogin=$(awk '/^permitrootlogin /{print $2; exit}' <<< "$eff")
+
+    if [ "$eff_port" != "$want_port" ] || [ "$eff_pwauth" != "$want_pwauth" ] || [ "$eff_rootlogin" != "$want_rootlogin" ]; then
+        printf "❌  Эффективный конфиг sshd НЕ совпадает с ожидаемым (port=%s pwauth=%s rootlogin=%s).\n" "$eff_port" "$eff_pwauth" "$eff_rootlogin"
+        printf "    Проверьте /etc/ssh/sshd_config.d/*.conf вручную. Перезапуск sshd ОТМЕНЁН, старый сервис продолжает работать.\n"
+        return 1
+    fi
+
+    local svc="ssh"
+    systemctl list-unit-files | grep -q "sshd.service" && svc="sshd"
+    mkdir -p /run/sshd
+    if sshd -t; then
+        systemctl restart "$svc" 2>/dev/null || systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || true
+        printf "✅  sshd перезапущен, эффективный конфиг подтверждён (port=%s pwauth=%s rootlogin=%s).\n" "$eff_port" "$eff_pwauth" "$eff_rootlogin"
+        return 0
+    else
+        printf "❌  sshd -t: синтаксическая ошибка, перезапуск отменён.\n"
+        return 1
+    fi
+}
+
 # Функция отката настроек, сделанных этим скриптом.
 # Софт (htop, iotop, nethogs, curl, wget, git, cron, ripgrep, unattended-upgrades)
 # НЕ удаляется — трогаем только то, что специфично для этого скрипта.
+# SSH-ключ (authorized_keys, PubkeyAuthentication) НЕ трогаем — только порт и пароль.
 rollback_preserver() {
     local SSHD_CFG="/etc/ssh/sshd_config"
 
     printf "\n♻️   Откат настроек preServer...\n"
     echo "──────────────────────────────────────"
 
-    # 1. SSH: порт обратно на 22, пароль обратно разрешаем
+    # 1. SSH: порт обратно на 22, пароль обратно разрешаем, ключ не трогаем
     if [ -f "$SSHD_CFG" ]; then
         cp "$SSHD_CFG" "${SSHD_CFG}.bak.$(date +%s)"
-        sed -i "s/^#\?Port.*/Port 22/" "$SSHD_CFG"
-        sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' "$SSHD_CFG"
-        sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' "$SSHD_CFG"
-        sed -i 's/^#\?PrintMotd.*/PrintMotd yes/' "$SSHD_CFG"
-        sed -i 's/^#\?PrintLastLog.*/PrintLastLog yes/' "$SSHD_CFG"
+        neutralize_sshd_dropins
+
+        if grep -qE '^\s*#?\s*Port\b' "$SSHD_CFG"; then
+            sed -i -E 's/^\s*#?\s*Port\b.*/Port 22/' "$SSHD_CFG"
+        else
+            echo "Port 22" >> "$SSHD_CFG"
+        fi
+        sed -i -E 's/^\s*#?\s*PermitRootLogin\b.*/PermitRootLogin yes/' "$SSHD_CFG"
+        sed -i -E 's/^\s*#?\s*PasswordAuthentication\b.*/PasswordAuthentication yes/' "$SSHD_CFG"
+        sed -i -E 's/^\s*#?\s*PrintMotd\b.*/PrintMotd yes/' "$SSHD_CFG"
+        sed -i -E 's/^\s*#?\s*PrintLastLog\b.*/PrintLastLog yes/' "$SSHD_CFG"
 
         # Если у root нет пароля (типично для VPS-образов с доступом только по ключу),
         # PasswordAuthentication yes не поможет — аккаунт остаётся заблокирован.
@@ -57,21 +107,11 @@ rollback_preserver() {
             printf "    Вход по паролю не заработает, пока вы не установите пароль: passwd root\n"
         fi
 
-        SSH_SERVICE_RB="ssh"
-        if systemctl list-unit-files | grep -q "sshd.service"; then
-            SSH_SERVICE_RB="sshd"
-        fi
-        mkdir -p /run/sshd
-        if sshd -t; then
-            systemctl restart "$SSH_SERVICE_RB" 2>/dev/null || systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || true
-            printf "✅  SSH возвращён на порт 22, вход по паролю разрешён.\n"
-        else
-            printf "⚠️  Конфигурация SSH некорректна после отката — проверьте %s вручную.\n" "$SSHD_CFG"
-        fi
-
         if command -v ufw &>/dev/null; then
             ufw allow 22/tcp comment 'SSH (preServer rollback)' >/dev/null 2>&1 || true
         fi
+
+        verify_and_restart_sshd 22 yes yes || printf "⚠️  Порт/пароль отредактированы в файле, но перезапуск не выполнен автоматически — проверьте вручную!\n"
     fi
 
     # 2. Удаляем fail2ban
@@ -109,7 +149,7 @@ rollback_preserver() {
     # 5. Удаляем метку запуска
     rm -f "$MARKER_FILE"
 
-    printf "\n✅  Откат завершён. Остальной софт (htop, iotop, nethogs, git, ripgrep и т.д.) оставлен без изменений.\n\n"
+    printf "\n✅  Откат завершён. Ключ доступа НЕ удалён. Остальной софт (htop, iotop, nethogs, git, ripgrep и т.д.) оставлен без изменений.\n\n"
 }
 
 if [ -f "$MARKER_FILE" ]; then
@@ -284,7 +324,9 @@ if [ "$SKIP_SSH_SETUP" = false ]; then
         cp "$SSH_CONFIG" "${SSH_CONFIG}.bak.$(date +%s)"
         # Держим только последние 5 бэкапов, старые удаляем
         ls -1t ${SSH_CONFIG}.bak.* 2>/dev/null | tail -n +6 | xargs -r rm -f
-        
+
+        neutralize_sshd_dropins
+
         if grep -q "^#Port" "$SSH_CONFIG" || grep -q "^Port" "$SSH_CONFIG"; then
             sed -i "s/^#\?Port.*/Port $SSH_PORT/" "$SSH_CONFIG"
         else
@@ -308,12 +350,7 @@ if [ "$SKIP_SSH_SETUP" = false ]; then
         fi
         
         printf "• Перезапуск SSH сервиса...\n"
-        
-        SSH_SERVICE="ssh"
-        if systemctl list-unit-files | grep -q "sshd.service"; then
-            SSH_SERVICE="sshd"
-        fi
-        
+
         # Обновляем порт в fail2ban под реальный выбранный SSH-порт
         if [ -f /etc/fail2ban/jail.local ]; then
             sed -i "s/^port = .*/port = $SSH_PORT/" /etc/fail2ban/jail.local
@@ -321,31 +358,18 @@ if [ "$SKIP_SSH_SETUP" = false ]; then
         fi
 
         # Открываем новый SSH-порт в ufw, если он установлен (чтобы не потерять доступ,
-        # если ufw будет включён позже без учёта нестандартного порта)
+        # если ufw будет включён позже без учёта нестандартного порта).
+        # Старый порт 22 НЕ закрываем автоматически.
         if command -v ufw &>/dev/null; then
             ufw allow "${SSH_PORT}/tcp" comment 'SSH (preServer)' >/dev/null 2>&1 || true
             printf "• Порт %s открыт в ufw (правило добавлено, сам ufw не включается автоматически)\n" "$SSH_PORT"
         fi
 
-        mkdir -p /run/sshd
-        if sshd -t; then
-            if systemctl restart "$SSH_SERVICE" 2>/dev/null; then
-                printf "✅  SSH настроен и перезапущен на порту %s (служба: %s)\n" "$SSH_PORT" "$SSH_SERVICE"
-            else
-                if [ "$SSH_SERVICE" = "ssh" ]; then
-                    ALT_SERVICE="sshd"
-                else
-                    ALT_SERVICE="ssh"
-                fi
-                
-                if systemctl restart "$ALT_SERVICE" 2>/dev/null; then
-                     printf "✅  SSH настроен и перезапущен на порту %s (служба: %s)\n" "$SSH_PORT" "$ALT_SERVICE"
-                else
-                     printf "⚠️  Не удалось автоматически перезапустить SSH. Пожалуйста, проверьте настройки и перезагрузите сервер вручную.\n"
-                fi
-            fi
+        if verify_and_restart_sshd "$SSH_PORT" no prohibit-password; then
+            :
         else
-            printf "❌  Ошибка в конфигурации SSH. Перезапуск отменен. Проверьте ${SSH_CONFIG}\n"
+            printf "❌  Настройки НЕ применены безопасно (эффективный конфиг не совпал или ошибка синтаксиса).\n"
+            printf "    Старый SSH продолжает работать на прежнем порту — проверьте %s и /etc/ssh/sshd_config.d/ вручную.\n" "$SSH_CONFIG"
             exit 1
         fi
     else
