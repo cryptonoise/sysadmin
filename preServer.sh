@@ -56,7 +56,12 @@ verify_and_restart_sshd() {
     eff_pwauth=$(awk '/^passwordauthentication /{print $2; exit}' <<< "$eff")
     eff_rootlogin=$(awk '/^permitrootlogin /{print $2; exit}' <<< "$eff")
 
-    if [ "$eff_port" != "$want_port" ] || [ "$eff_pwauth" != "$want_pwauth" ] || [ "$eff_rootlogin" != "$want_rootlogin" ]; then
+    # sshd -T нормализует синонимы: prohibit-password == without-password
+    local norm_want_rootlogin="$want_rootlogin" norm_eff_rootlogin="$eff_rootlogin"
+    [ "$norm_want_rootlogin" = "prohibit-password" ] && norm_want_rootlogin="without-password"
+    [ "$norm_eff_rootlogin" = "prohibit-password" ] && norm_eff_rootlogin="without-password"
+
+    if [ "$eff_port" != "$want_port" ] || [ "$eff_pwauth" != "$want_pwauth" ] || [ "$norm_eff_rootlogin" != "$norm_want_rootlogin" ]; then
         printf "❌  Эффективный конфиг sshd НЕ совпадает с ожидаемым (port=%s pwauth=%s rootlogin=%s).\n" "$eff_port" "$eff_pwauth" "$eff_rootlogin"
         printf "    Проверьте /etc/ssh/sshd_config.d/*.conf вручную. Перезапуск sshd ОТМЕНЁН, старый сервис продолжает работать.\n"
         return 1
