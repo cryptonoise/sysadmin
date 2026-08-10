@@ -15,7 +15,7 @@ safe_read() {
 
 # === Блок 1: Приветствие и инициализация ===
 SCRIPT_NAME="Linux Server Pre-Config"
-SCRIPT_VERSION="1.9.5"
+SCRIPT_VERSION="1.9.6"
 SCRIPT_DESC="Предварительная настройка Linux сервера"
 
 # Метка запуска
@@ -307,16 +307,16 @@ if [ "$SKIP_SSH_SETUP" = false ]; then
         safe_read "Введите порт SSH (по умолчанию $DEFAULT_PORT): " INPUT_PORT
         SSH_PORT=${INPUT_PORT:-$DEFAULT_PORT}
         if ! [[ "$SSH_PORT" =~ ^[0-9]+$ ]]; then
-            printf "❌  Ошибка: Порт должен быть числом.\n"
+            printf "\n❌  Ошибка: Порт должен быть числом.\n"
             continue
         fi
         if [ "$SSH_PORT" -lt 1 ] || [ "$SSH_PORT" -gt 65535 ]; then
-            printf "❌  Ошибка: Порт должен быть в диапазоне 1-65535.\n"
+            printf "\n❌  Ошибка: Порт должен быть в диапазоне 1-65535.\n"
             continue
         fi
         if command -v ss &>/dev/null; then
             if ss -tuln | grep -q ":${SSH_PORT} "; then
-                printf "⚠️  Порт %s уже занят другим сервисом.\n" "$SSH_PORT"
+                printf "\n⚠️  Порт %s уже занят другим сервисом.\n" "$SSH_PORT"
                 safe_read "Продолжить использование этого порта? (y/N): " confirm
                 if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
                     continue
@@ -325,24 +325,26 @@ if [ "$SKIP_SSH_SETUP" = false ]; then
         fi
         break
     done
-    printf "✅  Выбран порт SSH: %s\n" "$SSH_PORT"
+    # ИСПРАВЛЕНО: добавлен \n для вывода с новой строки
+    printf "\n✅  Выбран порт SSH: %s\n" "$SSH_PORT"
 
     # 2. Запрос SSH ключа
     SSH_KEY_INPUT=""
     while true; do
         safe_read "Введите SSH публичный ключ (начинается с ssh-rsa/ssh-ed25519/...): " SSH_KEY_INPUT
         if [ -z "$SSH_KEY_INPUT" ]; then
-            printf "❌  Ошибка: Ключ не может быть пустым.\n"
+            printf "\n❌  Ошибка: Ключ не может быть пустым.\n"
             continue
         fi
         if [[ "$SSH_KEY_INPUT" =~ ^(ssh-rsa|ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521)\  ]]; then
             break
         else
-            printf "❌  Ошибка: Неверный формат ключа. Он должен начинаться с типа ключа (например, ssh-ed25519).\n"
+            printf "\n❌  Ошибка: Неверный формат ключа. Он должен начинаться с типа ключа (например, ssh-ed25519).\n"
             printf "   Пример: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI...\n"
         fi
     done
-    printf "✅  Ключ принят.\n"
+    # ИСПРАВЛЕНО: добавлен \n для вывода с новой строки
+    printf "\n✅  Ключ принят.\n"
 
     # 3. Применение настроек SSH
     if [[ -f "$SSH_CONFIG" ]]; then
@@ -519,8 +521,8 @@ BOXART_TOP
         # Средняя строка с двумя зелёными точками-статусами (●|● = скрипт настройки отработал)
         # ВАЖНО: видимая (без учёта ANSI-кодов цвета) длина строки должна совпадать с остальными
         # строками рамки (32 символа), иначе правая часть рисунка "съезжает".
-        # Центрирование: 3 пробела слева, ●|●, 4 пробела справа = идеально по центру 14-символьного поля
-        printf '┃ ┃ ┃ ┃ ┃ ┃   \033[92m●\033[94m|\033[92m●\033[94m    ┃ ┃ ┃ ┃ ┃ ┃\n'
+        # Центрирование: 12 пробелов слева, ●|●, 12 пробелов справа = идеально по центру 30-символьного поля
+        printf '┃ ┃ ┃ ┃ ┃ ┃            \033[92m●\033[94m|\033[92m●\033[94m            ┃ ┃ ┃ ┃ ┃ ┃\n'
         cat << 'BOXART_BOTTOM'
 ┃ ┃ ┃ ┃ ┃ ┃          ┃ ┃ ┃ ┃ ┃ ┃
 ┃ ┃ ┃ ┃ ┃ ┗━━━━━━━━━━┛ ┃ ┃ ┃ ┃ ┃
