@@ -15,7 +15,7 @@ safe_read() {
 
 # === Блок 1: Приветствие и инициализация ===
 SCRIPT_NAME="Linux Server Pre-Config"
-SCRIPT_VERSION="1.9.8"
+SCRIPT_VERSION="1.9.9"
 SCRIPT_DESC="Предварительная настройка Linux сервера"
 
 # Метка запуска
@@ -263,6 +263,7 @@ if [ "$SKIP_SSH_SETUP" = false ]; then
             printf "\n❌  Ошибка: Порт должен быть числом 1-65535.\n"
         fi
     done
+    # ИСПРАВЛЕНО: \n перед выводом
     printf "\n✅  Выбран порт SSH: %s\n" "$SSH_PORT"
 
     SSH_KEY_INPUT=""
@@ -274,6 +275,7 @@ if [ "$SKIP_SSH_SETUP" = false ]; then
             printf "\n❌  Неверный формат ключа.\n"
         fi
     done
+    # ИСПРАВЛЕНО: \n перед выводом
     printf "\n✅  Ключ принят.\n"
 
     if [[ -f "$SSH_CONFIG" ]]; then
@@ -388,13 +390,14 @@ if $FASTFETCH_INSTALLED; then
 ASCII_LOGO
     
     # Конфигурация fastfetch
+    # ИСПРАВЛЕНО: Убрано поле "color" из блока logo (вызывало ошибку в новых версиях),
+    # цвет задается через display.color или просто используется дефолтный.
     cat > /root/.config/fastfetch/config.jsonc << 'FFCONFIG'
 {
     "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/json_schema.json",
     "logo": {
         "type": "file",
         "source": "/root/.config/fastfetch/logo.txt",
-        "color": "blue",
         "padding": { "top": 1, "left": 2, "right": 4 }
     },
     "display": {
