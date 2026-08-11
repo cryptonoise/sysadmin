@@ -1,5 +1,5 @@
 #!/bin/bash
-#curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/preServer.sh | sudo bash
+#curl -fsSL "https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/preServer.sh?nocache=$(date +%s)" | sudo bash
 set -euo pipefail
 
 # Открываем дескриптор 3 для чтения с терминала (клавиатуры)
