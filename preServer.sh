@@ -59,7 +59,7 @@ disable_ssh_socket_activation() {
 verify_and_restart_sshd() {
     local want_port="$1" want_pwauth="$2" want_rootlogin="$3"
 
-    # КРИТИЧНО: /run/sshd должен существовать ДО любого вызова sshd -T / sshd -t
+    # Дополнительная страховка: /run/sshd должен существовать ДО любого вызова sshd -T / sshd -t
     mkdir -p /run/sshd
     chmod 0755 /run/sshd
 
@@ -105,6 +105,10 @@ rollback_preserver() {
     local SSHD_CFG="/etc/ssh/sshd_config"
     printf "\n♻️   Откат настроек preServer...\n"
     echo "──────────────────────────────────────"
+
+    # Гарантируем наличие каталога и при откате
+    mkdir -p /run/sshd
+    chmod 0755 /run/sshd
 
     if [ -f "$SSHD_CFG" ]; then
         cp "$SSHD_CFG" "${SSHD_CFG}.bak.$(date +%s)"
@@ -235,6 +239,12 @@ printf "✅  Утилиты установлены.\n"
 # === Блок 5: Настройка SSH ===
 printf "🔐  Настройка SSH...\n"
 echo "──────────────────────────────────────"
+
+# КРИТИЧНОЕ ИСПРАВЛЕНИЕ: Создаём /run/sshd ЗАРАНЕЕ для новых серверов/LXC
+# Без этого sshd -T и sshd -t падают с ошибкой "Missing privilege separation directory"
+mkdir -p /run/sshd
+chmod 0755 /run/sshd
+
 SSH_CONFIG="/etc/ssh/sshd_config"
 DEFAULT_PORT=1119
 SSH_PORT=""
@@ -263,7 +273,6 @@ if [ "$SKIP_SSH_SETUP" = false ]; then
             printf "\n❌  Ошибка: Порт должен быть числом 1-65535.\n"
         fi
     done
-    # ИСПРАВЛЕНО: \n перед выводом
     printf "\n✅  Выбран порт SSH: %s\n" "$SSH_PORT"
 
     SSH_KEY_INPUT=""
@@ -275,7 +284,6 @@ if [ "$SKIP_SSH_SETUP" = false ]; then
             printf "\n❌  Неверный формат ключа.\n"
         fi
     done
-    # ИСПРАВЛЕНО: \n перед выводом
     printf "\n✅  Ключ принят.\n"
 
     if [[ -f "$SSH_CONFIG" ]]; then
@@ -294,10 +302,6 @@ if [ "$SKIP_SSH_SETUP" = false ]; then
         mkdir -p /root/.ssh && chmod 700 /root/.ssh
         grep -qF "$SSH_KEY_INPUT" /root/.ssh/authorized_keys 2>/dev/null || echo "$SSH_KEY_INPUT" >> /root/.ssh/authorized_keys
         chmod 600 /root/.ssh/authorized_keys
-
-        # КРИТИЧНО: Создаём /run/sshd до проверок
-        mkdir -p /run/sshd
-        chmod 0755 /run/sshd
 
         if [ -f /etc/fail2ban/jail.local ]; then
             sed -i "s/^port = .*/port = $SSH_PORT/" /etc/fail2ban/jail.local
@@ -369,8 +373,6 @@ if $FASTFETCH_INSTALLED; then
     printf "• Настройка логотипа и конфига...\n"
     mkdir -p /root/.config/fastfetch
 
-    # ГЕНЕРАЦИЯ ЛОГОТИПА ИЗ ТЕКСТОВОГО ФАЙЛА (ASCII ART)
-    # Используем только ASCII символы (+, -, |), чтобы избежать проблем с шириной символов в терминале
     cat > /root/.config/fastfetch/logo.txt << 'ASCII_LOGO'
 +------------------------------+
 | +--------------------------+ |
@@ -389,9 +391,6 @@ if $FASTFETCH_INSTALLED; then
 +------------------------------+
 ASCII_LOGO
     
-    # Конфигурация fastfetch
-    # ИСПРАВЛЕНО: Убрано поле "color" из блока logo (вызывало ошибку в новых версиях),
-    # цвет задается через display.color или просто используется дефолтный.
     cat > /root/.config/fastfetch/config.jsonc << 'FFCONFIG'
 {
     "$schema": "https://github.com/fastfetch-cli/fastfetch/raw/dev/doc/json_schema.json",
@@ -468,6 +467,6 @@ echo "version=$SCRIPT_VERSION" > "$MARKER_FILE"
 echo "ran_at=$(date '+%F %T')" >> "$MARKER_FILE"
 
 if [ -t 1 ] && [ -e /dev/tty ]; then
-    safe_read "🔄  Перезагрузить сейчас? [y/N]: " response
+    safe_read "\n🔄  Перезагрузить сейчас? [y/N]: " response
     [[ "$response" =~ ^[Yy]$ ]] && reboot
 fi
