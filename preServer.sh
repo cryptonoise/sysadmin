@@ -106,6 +106,13 @@ rollback_preserver() {
     printf "\n♻️   Откат настроек preServer...\n"
     echo "──────────────────────────────────────"
 
+    # Порт, который сам скрипт открывал в ufw при установке — читаем ДО удаления marker-файла,
+    # чтобы на откате убрать именно и только это правило, не трогая остальные правила ufw.
+    local OLD_SSH_PORT=""
+    if [ -f "$MARKER_FILE" ]; then
+        OLD_SSH_PORT="$(awk -F= '/^ssh_port=/{print $2; exit}' "$MARKER_FILE" 2>/dev/null || true)"
+    fi
+
     # Гарантируем наличие каталога и при откате
     mkdir -p /run/sshd
     chmod 0755 /run/sshd
@@ -130,6 +137,10 @@ rollback_preserver() {
 
         if command -v ufw &>/dev/null; then
             ufw allow 22/tcp comment 'SSH (preServer rollback)' >/dev/null 2>&1 || true
+            if [[ "$OLD_SSH_PORT" =~ ^[0-9]+$ ]] && [ "$OLD_SSH_PORT" != "22" ]; then
+                ufw --force delete allow "${OLD_SSH_PORT}/tcp" >/dev/null 2>&1 || true
+                printf "🗑️  Правило ufw для порта %s (preServer) удалено, остальные правила не тронуты.\n" "$OLD_SSH_PORT"
+            fi
         fi
 
         verify_and_restart_sshd 22 yes yes || printf "⚠️  Порт/пароль отредактированы, но перезапуск не выполнен — проверьте вручную!\n"
@@ -465,8 +476,9 @@ printf "   • Fastfetch: %s\n" "$($FASTFETCH_INSTALLED && echo 'Installed' || e
 mkdir -p "$MARKER_DIR"
 echo "version=$SCRIPT_VERSION" > "$MARKER_FILE"
 echo "ran_at=$(date '+%F %T')" >> "$MARKER_FILE"
+echo "ssh_port=${SSH_PORT:-skipped}" >> "$MARKER_FILE"
 
 if [ -t 1 ] && [ -e /dev/tty ]; then
-    safe_read "\n🔄  Перезагрузить сейчас? [y/N]: " response
+    safe_read $'\n🔄  Перезагрузить сейчас? [y/N]: ' response
     [[ "$response" =~ ^[Yy]$ ]] && reboot
 fi
