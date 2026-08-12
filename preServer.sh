@@ -479,6 +479,10 @@ echo "ran_at=$(date '+%F %T')" >> "$MARKER_FILE"
 echo "ssh_port=${SSH_PORT:-skipped}" >> "$MARKER_FILE"
 
 if [ -t 1 ] && [ -e /dev/tty ]; then
-    safe_read $'\n🔄  Перезагрузить сейчас? [y/N]: ' response
-    [[ "$response" =~ ^[Yy]$ ]] && reboot
+    printf "\n🔄  Перезагрузить сейчас? [y/N]: " > /dev/tty
+    REBOOT_ANSWER=""
+    IFS= read -r REBOOT_ANSWER < /dev/tty || true
+    if [[ "$REBOOT_ANSWER" =~ ^[Yy]$ ]]; then
+        reboot
+    fi
 fi
