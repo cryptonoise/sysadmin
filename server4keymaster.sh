@@ -13,14 +13,18 @@
 #   curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/server4keymaster.sh | sudo bash
 #
 # Необязательные переменные (для запуска без вопросов):
-#   curl -fsSL ... | sudo KM_DOMAIN=keygen.example.com KM_EMAIL=me@example.com bash
-#   KM_DOMAIN, KM_EMAIL, KM_PUBKEY ("ssh-rsa AAAA..."), KM_YES=1
+#   curl -fsSL ... | sudo KM_DOMAIN=keygen.example.com bash
+#   KM_DOMAIN, KM_YES=1
+#
+# Публичный ключ SFTP-пользователя всегда берётся из /root/.ssh/authorized_keys.
+# Сертификат Let's Encrypt всегда выпускается без e-mail.
 
 set -Eeuo pipefail
 
 # ─────────────────────────── Константы ───────────────────────────
-readonly SCRIPT_TITLE="KeyMaster · Server Setup"
-readonly SCRIPT_VERSION="6.0"
+readonly SCRIPT_TITLE="KeyMaster Server Setup"
+readonly SCRIPT_SUBTITLE="Автонастройка Ubuntu-сервера под KeyMaster.py"
+readonly SCRIPT_VERSION="6.1"
 
 readonly KM_USER="keygen"
 readonly KM_HOME="/var/www/keygen"            # remote_folder в KeyMaster.py
@@ -37,45 +41,96 @@ readonly TOTAL_STEPS=9
 
 export DEBIAN_FRONTEND=noninteractive
 
+# UTF-8 локаль: иначе кириллица считается в байтах и таблицы «едут»
+_LOCALES=$(locale -a 2>/dev/null || true)
+for _loc in C.UTF-8 C.utf8 en_US.UTF-8 en_US.utf8; do
+    if grep -qix "$_loc" <<<"$_LOCALES"; then export LC_ALL=$_loc; break; fi
+done
+unset _LOCALES _loc
+
 # ─────────────────────────── Оформление ──────────────────────────
 if [[ -t 1 ]]; then
     R=$'\033[0m'; B=$'\033[1m'; DIM=$'\033[2m'
-    RED=$'\033[31m'; GRN=$'\033[32m'; YEL=$'\033[33m'
-    BLU=$'\033[34m'; MAG=$'\033[35m'; CYN=$'\033[36m'
+    RED=$'\033[91m'; GRN=$'\033[92m'; YEL=$'\033[93m'
+    BLU=$'\033[94m'; MAG=$'\033[95m'; CYN=$'\033[96m'
     IS_TTY_OUT=1
 else
     R=""; B=""; DIM=""; RED=""; GRN=""; YEL=""; BLU=""; MAG=""; CYN=""
     IS_TTY_OUT=0
 fi
 
-HR=""
-for ((i = 0; i < 60; i++)); do HR+="━"; done
+readonly WIDTH=64           # ширина рамок и заголовков (без учёта отступа)
+readonly IN=$((WIDTH - 4))  # ширина текста внутри рамки
 
-STEP=0
-step() {
-    STEP=$((STEP + 1))
-    echo
-    printf '%s%s[%d/%d]%s %s%s%s\n' "$CYN" "$B" "$STEP" "$TOTAL_STEPS" "$R" "$B" "$1" "$R"
-    printf '%s%s%s\n' "$DIM" "$HR" "$R"
+LOG_READY=0
+log() { if (( LOG_READY )); then printf '%s\n' "$*" >>"$LOG"; fi; }
+
+rep() {  # rep СИМВОЛ N — повторить символ N раз
+    local out="" i
+    for ((i = 0; i < $2; i++)); do out+=$1; done
+    printf '%s' "$out"
 }
-section() {
-    echo
-    printf '%s%s%s%s\n' "$CYN" "$B" "$1" "$R"
-    printf '%s%s%s\n' "$DIM" "$HR" "$R"
+
+pad() {  # pad "текст" ширина — дополнить пробелами по числу СИМВОЛОВ (не байтов)
+    local n=$(( $2 - ${#1} ))
+    printf '%s' "$1"
+    if (( n > 0 )); then printf '%*s' "$n" ''; fi
 }
-ok()   { printf '  %s✔%s %s\n' "$GRN" "$R" "$*"; }
-info() { printf '  %sℹ%s %s\n' "$BLU" "$R" "$*"; }
-warn() { printf '  %s⚠%s %s\n' "$YEL" "$R" "$*"; }
-err()  { printf '  %s✖%s %s\n' "$RED" "$R" "$*" >&2; }
-kv()   { printf '  %s%-26s%s %s\n' "$DIM" "$1" "$R" "$2"; }
-die()  { err "$*"; printf '  %sПодробности в логе: %s%s\n' "$DIM" "$LOG" "$R" >&2; exit 1; }
+
+box_open()  { printf ' %s╭%s╮%s\n' "$1" "$(rep ─ $((WIDTH - 2)))" "$R"; }
+box_close() { printf ' %s╰%s╯%s\n' "$1" "$(rep ─ $((WIDTH - 2)))" "$R"; }
+box_row() {  # box_row ЦВЕТ_РАМКИ "слева" "справа" [ЦВЕТ_СЛЕВА] [ЦВЕТ_СПРАВА]
+    local c=$1 left=$2 right=${3:-} lc=${4:-} rc=${5:-} gap
+    gap=$(( IN - ${#left} - ${#right} ))
+    if (( gap < 1 )); then gap=1; fi
+    printf ' %s│%s %s%s%s%s%s%s%s %s│%s\n' \
+        "$c" "$R" "$lc" "$left" "$R" "$(rep ' ' "$gap")" "$rc" "$right" "$R" "$c" "$R"
+}
 
 banner() {
     echo
-    printf '%s%s╔════════════════════════════════════════════════════════════╗%s\n' "$CYN" "$B" "$R"
-    printf '%s%s║%s  %s%-40s%s %17s  %s%s║%s\n' "$CYN" "$B" "$R" "$GRN$B" "$SCRIPT_TITLE" "$R" "v${SCRIPT_VERSION}" "$R" "$CYN$B" "$R"
-    printf '%s%s╚════════════════════════════════════════════════════════════╝%s\n' "$CYN" "$B" "$R"
+    box_open "$CYN"
+    box_row "$CYN" "$SCRIPT_TITLE" "v${SCRIPT_VERSION}" "$GRN$B" "$DIM"
+    box_row "$CYN" "$SCRIPT_SUBTITLE" "" "$DIM" ""
+    box_close "$CYN"
 }
+
+heading() {  # heading "Заголовок" ["метка"]
+    local text=$1 tag=${2:-} used fill
+    if [[ -n $tag ]]; then
+        used=$(( 4 + ${#tag} + 2 + ${#text} + 1 ))
+    else
+        used=$(( 4 + ${#text} + 1 ))
+    fi
+    fill=$(( WIDTH + 1 - used ))
+    if (( fill < 3 )); then fill=3; fi
+    echo
+    if [[ -n $tag ]]; then
+        printf ' %s━━%s %s%s%s  %s%s%s %s%s%s\n' \
+            "$CYN$B" "$R" "$CYN$B" "$tag" "$R" "$B" "$text" "$R" "$DIM$CYN" "$(rep ━ "$fill")" "$R"
+    else
+        printf ' %s━━%s %s%s%s %s%s%s\n' \
+            "$CYN$B" "$R" "$B" "$text" "$R" "$DIM$CYN" "$(rep ━ "$fill")" "$R"
+    fi
+    log ""
+    log "=== ${tag:+[$tag] }${text} ==="
+}
+
+STEP=0
+step()    { STEP=$((STEP + 1)); heading "$1" "${STEP}/${TOTAL_STEPS}"; }
+section() { heading "$1"; }
+
+ok()   { printf '  %s✔%s %s\n' "$GRN" "$R" "$*"; log "[ok]   $*"; }
+info() { printf '  %s›%s %s\n' "$BLU" "$R" "$*"; log "[info] $*"; }
+warn() { printf '  %s▲%s %s\n' "$YEL" "$R" "$*"; log "[warn] $*"; }
+err()  { printf '  %s✖%s %s\n' "$RED" "$R" "$*" >&2; log "[err]  $*"; }
+kv()   { printf '  %s%s%s %s\n' "$DIM" "$(pad "$1" 24)" "$R" "$2"; log "[info] $1: $2"; }
+cfg()  {  # cfg имя значение [комментарий] — строка настроек для KeyMaster.py
+    printf '    %s%s%s = %s%s%s' "$CYN" "$(pad "$1" 17)" "$R" "$GRN" "$2" "$R"
+    if [[ -n ${3:-} ]]; then printf '  %s# %s%s' "$DIM" "$3" "$R"; fi
+    echo
+}
+die()  { err "$*"; printf '  %sПодробности в логе: %s%s\n' "$DIM" "$LOG" "$R" >&2; exit 1; }
 
 # Выполнить команду тихо (вывод в лог), показать результат одной строкой
 run() {
@@ -120,7 +175,7 @@ prompt() {  # prompt VAR "Текст" [значение по умолчанию]
 
 confirm() {  # confirm "Вопрос" Y|N  → 0 = да
     local text=$1 def=${2:-Y} ans="" hint
-    if [[ $def == Y ]]; then hint="Y/n"; else hint="y/N"; fi
+    if [[ $def == Y ]]; then hint="Enter/y — да, n — нет"; else hint="Enter/n — нет, y — да"; fi
     if (( ! HAVE_TTY )) || [[ ${KM_YES:-0} == 1 ]]; then
         if [[ $def == Y ]]; then return 0; else return 1; fi
     fi
@@ -199,6 +254,8 @@ server {
     listen 80;
     ${l6}
     server_name ${DOMAIN};
+
+    add_header X-KeyMaster "stage1-http" always;   # метка для диагностики
 
     location ^~ /.well-known/acme-challenge/ {
         root ${ACME_ROOT};
@@ -308,6 +365,40 @@ nginx_apply() {  # nginx -t → reload (если работает) или зап
         run "Перезагрузка nginx (без обрыва текущих соединений)" systemctl reload nginx || die "Не удалось перезагрузить nginx"
     else
         run "Запуск nginx" systemctl enable --now nginx || die "Не удалось запустить nginx"
+    fi
+}
+
+# Диагностика: почему nginx не отдал challenge-файл (пишет в лог, вердикт — в консоль)
+diagnose_acme() {
+    {
+        echo
+        echo "### $(date '+%F %T') — ДИАГНОСТИКА: nginx не отдал challenge-файл"
+        echo "Запрос : GET http://127.0.0.1/.well-known/acme-challenge/${PROBE_NAME} (Host: ${DOMAIN})"
+        echo "Попыток: ${PROBE_TRIES}; HTTP-код: ${PROBE_CODE:-нет ответа}; тело: '${PROBE_BODY:0:200}'"
+        echo "--- заголовки ответа на пробу"
+        cat "$PROBE_HDRS" 2>/dev/null || true
+        echo "--- HEAD / (какой server-блок отвечает; наш помечен X-KeyMaster)"
+        curl -sI --max-time 5 -H "Host: ${DOMAIN}" http://127.0.0.1/ 2>&1 || true
+        echo "--- путь и права файла-пробы"
+        namei -l "$PROBE_FILE" 2>&1 || true
+        echo "--- наш конфиг"
+        ls -l "$CONF_AVAIL" ${CONF_LINK:+"$CONF_LINK"} 2>&1 || true
+        echo "--- кто слушает :80"
+        ss -ltnp 'sport = :80' 2>&1 || true
+        echo "--- listen / server_name во всей активной конфигурации (nginx -T)"
+        nginx -T 2>/dev/null | grep -nE '^# configuration file|^[[:space:]]*(listen|server_name)[[:space:]]|default_server' || true
+        echo "--- переменные прокси в окружении"
+        env | grep -i proxy || echo "(нет)"
+        echo "--- nginx error.log (последние 15 строк)"
+        tail -n 15 /var/log/nginx/error.log 2>&1 || true
+    } >>"$LOG" 2>&1
+
+    if grep -qi '^x-keymaster:' "$PROBE_HDRS" 2>/dev/null; then
+        err "Ответил наш server-блок, но файл не отдан (HTTP ${PROBE_CODE:-?}) — проверьте путь и права ${ACME_ROOT}"
+    elif [[ -z $PROBE_CODE ]]; then
+        err "nginx не ответил на 127.0.0.1:80 (попыток: ${PROBE_TRIES})"
+    else
+        err "Запрос обработал ДРУГОЙ server-блок (HTTP ${PROBE_CODE}) — он перехватывает ${DOMAIN}"
     fi
 }
 
@@ -423,7 +514,12 @@ if [[ $EUID -ne 0 ]]; then
 fi
 mkdir -p "$(dirname "$LOG")"
 touch "$LOG"; chmod 600 "$LOG"
-echo "=== server4keymaster.sh v${SCRIPT_VERSION} — $(date '+%F %T') ===" >>"$LOG"
+LOG_READY=1
+{
+    echo
+    echo "=== ${SCRIPT_TITLE} v${SCRIPT_VERSION} — $(date '+%F %T') ==="
+    echo "host: $(hostname), kernel: $(uname -r), запуск от: ${SUDO_USER:-root}"
+} >>"$LOG"
 
 # ───────────────────── [1] Проверка окружения ─────────────────────
 step "Проверка сервера"
@@ -491,7 +587,7 @@ if [[ -f $MARKER ]]; then
     kv "Домен" "$(mk_get DOMAIN)"
     kv "Установлено" "$(mk_get INSTALLED_AT)"
     echo
-    echo "    1) Обновить настройки (домен / сертификат / ключ)"
+    echo "    1) Обновить настройки (домен / сертификат)"
     echo "    2) Удалить всё, что создал скрипт"
     echo "    3) Выйти"
     prompt ACTION "Выбор" "1"
@@ -516,69 +612,30 @@ while true; do
 done
 ok "Домен: ${DOMAIN}"
 
-EMAIL=${KM_EMAIL:-}
-if [[ -z $EMAIL ]]; then
-    prompt EMAIL "E-mail для уведомлений Let's Encrypt (Enter — без e-mail)" ""
-fi
-if [[ -n $EMAIL ]]; then ok "E-mail: ${EMAIL}"; else info "E-mail не указан"; fi
-
-# SSH-ключ для SFTP-пользователя
-KEY_DATA=""
-KEEP_KEYS=0
+# SSH-ключ для SFTP-пользователя: всегда ключи root, без вопросов
 ROOT_KEYS=""
 if [[ -f /root/.ssh/authorized_keys ]]; then
     ROOT_KEYS=$(grep -E '^(ssh-|ecdsa-|sk-)' /root/.ssh/authorized_keys || true)
 fi
+[[ -n $ROOT_KEYS ]] || die "В /root/.ssh/authorized_keys нет ключей — SFTP-пользователю нечего выдавать"
 
-echo
-info "KeyMaster.py подключается по SFTP с ПРИВАТНЫМ ключом (uploadkey.pem, тип RSA)."
-info "Нужен соответствующий ПУБЛИЧНЫЙ ключ (строка вида: ssh-rsa AAAA... comment)."
-if [[ -n ${KM_PUBKEY:-} ]]; then
-    KEY_DATA=$KM_PUBKEY
-else
-    if [[ -f $KEYS_FILE ]]; then
-        key_hint="Enter — оставить текущий ключ ${KM_USER}"
-    elif [[ -n $ROOT_KEYS ]]; then
-        key_hint="Enter — взять ключи root"
+KEY_DATA=""; KEY_OK=0; KEY_RSA=0
+tmp_key=$(mktemp)
+while IFS= read -r line; do
+    [[ -z $line ]] && continue
+    printf '%s\n' "$line" >"$tmp_key"
+    if ssh-keygen -l -f "$tmp_key" >/dev/null 2>&1; then
+        KEY_DATA+="${line}"$'\n'
+        KEY_OK=$((KEY_OK + 1))
+        if [[ $line == ssh-rsa* ]]; then KEY_RSA=$((KEY_RSA + 1)); fi
     else
-        key_hint="обязательно"
+        log "Пропущен некорректный ключ root: ${line:0:50}…"
     fi
-    while true; do
-        prompt KEY_DATA "Публичный ключ (${key_hint})" ""
-        if [[ -z $KEY_DATA ]]; then
-            if [[ -f $KEYS_FILE ]]; then KEEP_KEYS=1; break; fi
-            if [[ -n $ROOT_KEYS ]]; then KEY_DATA=$ROOT_KEYS; break; fi
-            if (( ! HAVE_TTY )); then die "Не задан публичный ключ (KM_PUBKEY)"; fi
-            err "Ключ не может быть пустым"
-            continue
-        fi
-        break
-    done
-fi
-
-if (( ! KEEP_KEYS )); then
-    # валидация и проверка типа
-    tmp_key=$(mktemp)
-    KEY_OK=0; KEY_NON_RSA=0
-    while IFS= read -r line; do
-        [[ -z $line ]] && continue
-        printf '%s\n' "$line" >"$tmp_key"
-        if ssh-keygen -l -f "$tmp_key" >/dev/null 2>&1; then
-            KEY_OK=$((KEY_OK + 1))
-            if [[ $line != ssh-rsa* ]]; then KEY_NON_RSA=$((KEY_NON_RSA + 1)); fi
-        else
-            rm -f "$tmp_key"
-            die "Некорректный публичный ключ: ${line:0:50}…"
-        fi
-    done <<<"$KEY_DATA"
-    rm -f "$tmp_key"
-    (( KEY_OK > 0 )) || die "Не найдено ни одного корректного ключа"
-    ok "Ключей принято: ${KEY_OK}"
-    if (( KEY_NON_RSA > 0 )); then
-        warn "Не все ключи типа ssh-rsa. KeyMaster.py использует paramiko.RSAKey — для него нужен RSA-ключ."
-    fi
-else
-    ok "Текущий ключ пользователя ${KM_USER} сохранён"
+done <<<"$ROOT_KEYS"
+rm -f "$tmp_key"
+(( KEY_OK > 0 )) || die "В /root/.ssh/authorized_keys не найдено ни одного корректного ключа"
+if (( KEY_RSA == 0 )); then
+    warn "Среди ключей root нет ssh-rsa, а KeyMaster.py использует paramiko.RSAKey — нужен RSA-ключ"
 fi
 
 echo
@@ -667,11 +724,9 @@ ok "Папка ${KM_HOME} (владелец ${KM_USER}, чтение для ngin
 # Ключи лежат вне веб-папки, чтобы не раздаваться nginx и не удаляться KeyMaster'ом
 mkdir -p "$KEYS_DIR"
 chown root:root "$KEYS_DIR"; chmod 755 "$KEYS_DIR"
-if (( ! KEEP_KEYS )); then
-    printf '%s\n' "$KEY_DATA" >"$KEYS_FILE"
-    chown root:root "$KEYS_FILE"; chmod 644 "$KEYS_FILE"
-    ok "Публичный ключ установлен: ${KEYS_FILE}"
-fi
+printf '%s' "$KEY_DATA" >"$KEYS_FILE"
+chown root:root "$KEYS_FILE"; chmod 644 "$KEYS_FILE"
+log "Ключи root (${KEY_OK} шт.) записаны в ${KEYS_FILE}"
 
 # Не мешает ли AllowUsers / AllowGroups
 SSHD_EFFECTIVE=$(sshd -T 2>/dev/null || true)
@@ -728,17 +783,30 @@ else
     info "Если у хостера есть внешний firewall — откройте 80/tcp и ${HTTPS_PORT}/tcp"
 fi
 
-# Самопроверка: отдаёт ли nginx challenge-файлы
+# Самопроверка: отдаёт ли nginx challenge-файлы.
+# После reload новые воркеры стартуют не мгновенно, поэтому несколько попыток.
 PROBE_NAME="km-probe-$$"
 PROBE_FILE="${ACME_ROOT}/.well-known/acme-challenge/${PROBE_NAME}"
+PROBE_HDRS=$(mktemp)
+PROBE_BODY=""; PROBE_CODE=""; PROBE_TRIES=0
 echo "km-ok" >"$PROBE_FILE"
-PROBE_RESULT=$(curl -s --max-time 5 -H "Host: ${DOMAIN}" "http://127.0.0.1/.well-known/acme-challenge/${PROBE_NAME}" || true)
-rm -f "$PROBE_FILE"
-if [[ $PROBE_RESULT == km-ok ]]; then
+chmod 644 "$PROBE_FILE"
+for PROBE_TRIES in 1 2 3 4 5 6 7 8 9 10; do
+    PROBE_BODY=$(curl -s --max-time 5 -D "$PROBE_HDRS" -H "Host: ${DOMAIN}" \
+        "http://127.0.0.1/.well-known/acme-challenge/${PROBE_NAME}" || true)
+    PROBE_CODE=$(awk 'NR==1{print $2}' "$PROBE_HDRS" 2>/dev/null || true)
+    if [[ $PROBE_BODY == km-ok ]]; then break; fi
+    sleep 0.5
+done
+if [[ $PROBE_BODY == km-ok ]]; then
+    rm -f "$PROBE_FILE" "$PROBE_HDRS"
     ok "nginx отдаёт challenge-файлы для ${DOMAIN}"
 else
+    diagnose_acme
+    rm -f "$PROBE_FILE" "$PROBE_HDRS"
     rollback_conf
-    die "nginx не отдаёт /.well-known/ для ${DOMAIN}. Вероятно, другой server-блок перехватывает запросы."
+    if nginx -t >>"$LOG" 2>&1; then systemctl reload nginx >>"$LOG" 2>&1 || true; fi
+    die "nginx не отдаёт /.well-known/ для ${DOMAIN} — наш конфиг откатан, причина записана в лог"
 fi
 
 # ───────────────────── [7] Сертификат ─────────────────────────────
@@ -755,8 +823,7 @@ fi
 
 if (( ! CERT_READY )); then
     CERTBOT_ARGS=(certonly --webroot -w "$ACME_ROOT" -d "$DOMAIN" --cert-name "$DOMAIN"
-        --non-interactive --agree-tos --keep-until-expiring)
-    if [[ -n $EMAIL ]]; then CERTBOT_ARGS+=(-m "$EMAIL"); else CERTBOT_ARGS+=(--register-unsafely-without-email); fi
+        --non-interactive --agree-tos --keep-until-expiring --register-unsafely-without-email)
     if ! run "Запрос сертификата для ${DOMAIN}" certbot "${CERTBOT_ARGS[@]}"; then
         echo
         warn "Сертификат не выпущен. Частые причины:"
@@ -831,24 +898,24 @@ MEDIA_URL="https://${DOMAIN}"
 if [[ $HTTPS_PORT != 443 ]]; then MEDIA_URL+=":${HTTPS_PORT}"; fi
 
 echo
-printf '%s%s╔════════════════════════════════════════════════════════════╗%s\n' "$GRN" "$B" "$R"
-printf '%s%s║  ✔ Сервер готов к работе с KeyMaster.py                    ║%s\n' "$GRN" "$B" "$R"
-printf '%s%s╚════════════════════════════════════════════════════════════╝%s\n' "$GRN" "$B" "$R"
-echo
-printf '  %sПропишите в KeyMaster.py (ПАРАМЕТРЫ СЕРВЕРА):%s\n\n' "$B" "$R"
-printf '    server_ip        = "%s"\n' "${PUBLIC_IP:-IP_СЕРВЕРА}"
-printf '    server_port      = %s\n' "$SSH_PORT"
-printf '    username         = "%s"\n' "$KM_USER"
-printf '    remote_folder    = "%s"\n' "$KM_HOME"
-printf '    media_domain     = "%s"\n' "$MEDIA_URL"
-printf '    private_key_path = "uploadkey.pem"   %s# приватный ключ RSA к загруженному публичному%s\n' "$DIM" "$R"
-echo
-printf '  %sПроверка вручную:%s\n' "$B" "$R"
+box_open "$GRN"
+box_row "$GRN" "✔ Сервер готов к работе с KeyMaster.py" "" "$GRN$B" ""
+box_close "$GRN"
+
+section "Пропишите в KeyMaster.py"
+cfg server_ip        "\"${PUBLIC_IP:-IP_СЕРВЕРА}\""
+cfg server_port      "$SSH_PORT"
+cfg username         "\"${KM_USER}\""
+cfg remote_folder    "\"${KM_HOME}\""
+cfg media_domain     "\"${MEDIA_URL}\""
+cfg private_key_path "\"uploadkey.pem\"" "приватный RSA-ключ к ключу root"
+
+section "Проверка вручную"
 printf '    sftp -i uploadkey.pem -P %s %s@%s\n' "$SSH_PORT" "$KM_USER" "${PUBLIC_IP:-IP_СЕРВЕРА}"
-echo
-printf '  %sПолезное:%s\n' "$B" "$R"
-printf '    %s%s\n' "Логи nginx:   " "tail -f /var/log/nginx/keymaster.access.log"
-printf '    %s%s\n' "Лог скрипта:  " "$LOG"
-printf '    %s%s\n' "Конфиг nginx: " "$CONF_AVAIL"
-printf '    %s%s\n' "Удаление:     " "запустите скрипт снова → пункт 2"
+
+section "Полезное"
+kv "Логи nginx"   "tail -f /var/log/nginx/keymaster.access.log"
+kv "Лог скрипта"  "$LOG"
+kv "Конфиг nginx" "$CONF_AVAIL"
+kv "Удаление"     "запустите скрипт снова → пункт 2"
 echo
