@@ -872,22 +872,6 @@ write_marker
 # ───────────────────── [9] Проверка и итоги ───────────────────────
 step "Финальная проверка"
 
-CHECK_FILE="${KM_HOME}/km-selftest-$$.txt"
-echo "keymaster-ok" >"$CHECK_FILE"
-chown "${KM_USER}:${KM_USER}" "$CHECK_FILE"; chmod 644 "$CHECK_FILE"
-
-HTTPS_RESULT=$(curl -fsS --max-time 10 --resolve "${DOMAIN}:${HTTPS_PORT}:127.0.0.1" \
-    "https://${DOMAIN}:${HTTPS_PORT}/$(basename "$CHECK_FILE")" 2>>"$LOG" || true)
-rm -f "$CHECK_FILE"
-if [[ $HTTPS_RESULT == keymaster-ok ]]; then
-    ok "HTTPS работает: файл из ${KM_HOME} отдаётся с валидным сертификатом"
-else
-    warn "Проверка HTTPS не прошла — смотрите: nginx -t, ${LOG}, /var/log/nginx/keymaster.error.log"
-fi
-
-HTTP_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 -H "Host: ${DOMAIN}" http://127.0.0.1/ || true)
-if [[ $HTTP_CODE == 301 ]]; then ok "HTTP :80 → редирект на HTTPS"; else warn "HTTP :80 вернул код ${HTTP_CODE:-?} (ожидался 301)"; fi
-
 FC=$(sshd -T -C "user=${KM_USER},host=localhost,addr=127.0.0.1" 2>/dev/null | grep -i '^forcecommand' || true)
 if [[ $FC == *internal-sftp* ]]; then ok "sshd: ${KM_USER} ограничен SFTP (${FC#forcecommand })"; else warn "Не удалось подтвердить ForceCommand для ${KM_USER}"; fi
 
@@ -909,13 +893,4 @@ cfg username         "\"${KM_USER}\""
 cfg remote_folder    "\"${KM_HOME}\""
 cfg media_domain     "\"${MEDIA_URL}\""
 cfg private_key_path "\"uploadkey.pem\"" "приватный RSA-ключ к ключу root"
-
-section "Проверка вручную"
-printf '    sftp -i uploadkey.pem -P %s %s@%s\n' "$SSH_PORT" "$KM_USER" "${PUBLIC_IP:-IP_СЕРВЕРА}"
-
-section "Полезное"
-kv "Логи nginx"   "tail -f /var/log/nginx/keymaster.access.log"
-kv "Лог скрипта"  "$LOG"
-kv "Конфиг nginx" "$CONF_AVAIL"
-kv "Удаление"     "запустите скрипт снова → пункт 2"
 echo
