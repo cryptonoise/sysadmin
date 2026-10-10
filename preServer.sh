@@ -13,10 +13,18 @@ safe_read() {
     IFS= read -r "$varname" <&3
 }
 
+# Сбрасываем всё, что накопилось в буфере терминала (случайные Enter, хвост вставленного ключа),
+# иначе такой "залежавшийся" Enter мгновенно ответит "да" на следующий вопрос.
+drain_tty() {
+    local _junk
+    while IFS= read -r -t 0.05 -n 1 -u 3 _junk; do :; done
+}
+
 # Вопрос "да/нет": Enter или y/Y/д/Д = да, n/N/н/Н = нет (повторяет вопрос при другом вводе)
 # Возврат: 0 — да, 1 — нет
 ask_yn() {
     local prompt="$1" ans
+    drain_tty
     while true; do
         safe_read "$prompt [Enter/y — да, n — нет]: " ans
         case "${ans,,}" in
@@ -27,9 +35,70 @@ ask_yn() {
     done
 }
 
+# === UI-хелперы: этапы и "тихий" запуск команд с индикатором ===
+LOG_FILE="/var/log/preserver.log"
+TOTAL_STAGES=7
+STAGE_NUM=0
+touch "$LOG_FILE" 2>/dev/null || LOG_FILE="/tmp/preserver.log"
+
+if [ -t 1 ]; then
+    C_HEAD=$'\033[1;36m'; C_DIM=$'\033[2m'; C_RST=$'\033[0m'
+else
+    C_HEAD=""; C_DIM=""; C_RST=""
+fi
+
+banner() {
+    local line="━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    printf "\n%s%s%s\n" "$C_HEAD" "$line" "$C_RST"
+    printf "%s %s%s\n" "$C_HEAD" "$1" "$C_RST"
+    printf "%s%s%s\n" "$C_HEAD" "$line" "$C_RST"
+}
+
+stage() {
+    STAGE_NUM=$((STAGE_NUM + 1))
+    banner "[${STAGE_NUM}/${TOTAL_STAGES}]  $1"
+}
+
+# run_quiet [-s] "Описание" команда args...
+# Вывод команды уходит в лог, на экране — одна строка со статусом и таймером.
+# -s (soft): при ошибке только предупреждение, без вывода лога.
+run_quiet() {
+    local soft=false
+    if [ "${1:-}" = "-s" ]; then soft=true; shift; fi
+    local msg="$1"; shift
+    local rc=0 pid i=0 start=$SECONDS
+    local frames='|/-\'
+
+    printf '\n===== %s | %s =====\n' "$(date '+%F %T')" "$msg" >> "$LOG_FILE"
+
+    "$@" >> "$LOG_FILE" 2>&1 < /dev/null &
+    pid=$!
+
+    if [ -t 1 ]; then
+        while kill -0 "$pid" 2>/dev/null; do
+            printf '\r   %s  %s  %s(%ds)%s' "${frames:i%4:1}" "$msg" "$C_DIM" $((SECONDS - start)) "$C_RST"
+            i=$((i + 1))
+            sleep 0.2
+        done
+        printf '\r\033[K'
+    fi
+    wait "$pid" || rc=$?
+
+    if [ "$rc" -eq 0 ]; then
+        printf "   ✅  %s %s(%ds)%s\n" "$msg" "$C_DIM" $((SECONDS - start)) "$C_RST"
+    elif $soft; then
+        printf "   ⚠️  %s — пропущено\n" "$msg"
+    else
+        printf "   ❌  %s — ошибка (код %d)\n" "$msg" "$rc"
+        printf "       Последние строки лога (%s):\n" "$LOG_FILE"
+        tail -n 15 "$LOG_FILE" | sed 's/^/       │ /'
+    fi
+    return "$rc"
+}
+
 # === Блок 1: Приветствие и инициализация ===
 SCRIPT_NAME="Linux Server Pre-Config"
-SCRIPT_VERSION="2.3"
+SCRIPT_VERSION="2.4"
 SCRIPT_DESC="Предварительная настройка Linux сервера"
 
 # Метка запуска
@@ -124,8 +193,7 @@ verify_and_restart_sshd() {
 
 rollback_preserver() {
     local SSHD_CFG="/etc/ssh/sshd_config"
-    printf "\n♻️   Откат настроек preServer...\n"
-    echo "──────────────────────────────────────"
+    banner "♻️   Откат настроек preServer"
 
     # Порт, который сам скрипт открывал в ufw при установке — читаем ДО удаления marker-файла,
     # чтобы на откате убрать именно и только это правило, не трогая остальные правила ufw.
@@ -218,29 +286,27 @@ export APT_LISTCHANGES_FRONTEND=none
 export PYTHONWARNINGS="ignore::SyntaxWarning"
 
 # === Блок 2: Проверка dpkg ===
-printf "🔧  Проверка целостности пакетной базы...\n"
-echo "──────────────────────────────────────"
+stage "🔧  Проверка пакетной базы"
 if [ -d /var/lib/dpkg/updates ] && ls /var/lib/dpkg/updates/* >/dev/null 2>&1; then
-    printf "⚠️  Восстанавливаю систему...\n"
+    printf "   ⚠️  Обнаружены незавершённые операции dpkg, восстанавливаю...\n"
     rm -f /var/lib/dpkg/lock /var/lib/dpkg/lock-frontend /var/cache/apt/archives/lock /var/lib/apt/lists/lock
-    dpkg --configure -a --force-confdef --force-confold || true
+    run_quiet "dpkg --configure -a" dpkg --configure -a --force-confdef --force-confold || true
     rm -f /var/lib/dpkg/updates/*
-    dpkg --configure -a || true
+    run_quiet "dpkg --configure -a (повторно)" dpkg --configure -a || true
 fi
-printf "✅  Пакетная база в порядке.\n"
+printf "   ✅  Пакетная база в порядке\n"
 
 # === Блок 3: Обновление системы ===
-printf "🔄  Обновление системы...\n"
-echo "──────────────────────────────────────"
-apt-get update -qq
-apt-get upgrade -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"
-apt-get dist-upgrade -y -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold"
-apt-get autoremove -y
-printf "✅  Система обновлена!\n"
+stage "🔄  Обновление системы"
+APT_OPTS=(-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold)
+run_quiet "Обновление списков пакетов" apt-get update -qq
+run_quiet "Обновление пакетов (upgrade)" apt-get upgrade -y "${APT_OPTS[@]}"
+run_quiet "Обновление дистрибутива (dist-upgrade)" apt-get dist-upgrade -y "${APT_OPTS[@]}"
+run_quiet "Удаление ненужных пакетов" apt-get autoremove -y
+printf "   ✅  Система обновлена\n"
 
 # === Блок 4: Установка утилит ===
-printf "📦  Установка утилит...\n"
-echo "──────────────────────────────────────"
+stage "📦  Установка утилит"
 PACKAGES=("unattended-upgrades" "fail2ban" "htop" "iotop" "nethogs" "curl" "wget" "git" "cron" "ripgrep")
 MISSING_PACKAGES=()
 for pkg in "${PACKAGES[@]}"; do
@@ -249,7 +315,9 @@ for pkg in "${PACKAGES[@]}"; do
     fi
 done
 if [ "${#MISSING_PACKAGES[@]}" -gt 0 ]; then
-    apt-get install -y --no-install-recommends "${MISSING_PACKAGES[@]}"
+    run_quiet "Установка пакетов: ${MISSING_PACKAGES[*]}" apt-get install -y --no-install-recommends "${MISSING_PACKAGES[@]}"
+else
+    printf "   ✅  Все утилиты уже установлены\n"
 fi
 
 mkdir -p /etc/fail2ban
@@ -266,11 +334,10 @@ systemctl enable fail2ban >/dev/null 2>&1 || true
 systemctl restart fail2ban >/dev/null 2>&1 || true
 systemctl enable cron >/dev/null 2>&1 || true
 systemctl start cron >/dev/null 2>&1 || true
-printf "✅  Утилиты установлены.\n"
+printf "   ✅  Fail2ban и утилиты настроены\n"
 
 # === Блок 5: Настройка SSH ===
-printf "🔐  Настройка SSH...\n"
-echo "──────────────────────────────────────"
+stage "🔐  Настройка SSH"
 
 # КРИТИЧНОЕ ИСПРАВЛЕНИЕ: Создаём /run/sshd ЗАРАНЕЕ для новых серверов/LXC
 # Без этого sshd -T и sshd -t падают с ошибкой "Missing privilege separation directory"
@@ -278,21 +345,13 @@ mkdir -p /run/sshd
 chmod 0755 /run/sshd
 
 SSH_CONFIG="/etc/ssh/sshd_config"
-DEFAULT_PORT=22
+DEFAULT_PORT=1119
 SSH_PORT=""
 SKIP_SSH_SETUP=false
 
-if command -v ss &>/dev/null; then
-    if ss -tulnp | grep ":${DEFAULT_PORT} " | grep -vq sshd; then
-        SKIP_SSH_SETUP=true
-        SSH_PORT="skipped"
-        printf "⚠️  Порт %s занят — настройка SSH пропущена.\n" "$DEFAULT_PORT"
-    fi
-fi
-
 if [ "$SKIP_SSH_SETUP" = false ]; then
     while true; do
-        safe_read "Введите внутренний порт SSH (по умолчанию $DEFAULT_PORT; за NAT оставьте 22): " INPUT_PORT
+        safe_read "Введите внутренний порт SSH (по умолчанию $DEFAULT_PORT): " INPUT_PORT
         SSH_PORT=${INPUT_PORT:-$DEFAULT_PORT}
         if [[ "$SSH_PORT" =~ ^[0-9]+$ ]] && [ "$SSH_PORT" -ge 1 ] && [ "$SSH_PORT" -le 65535 ]; then
              if command -v ss &>/dev/null && ss -tulnp | grep ":${SSH_PORT} " | grep -vq sshd; then
@@ -361,7 +420,7 @@ if [ "$SKIP_SSH_SETUP" = false ]; then
 fi
 
 # === Блок 6: Автообновления ===
-printf "\n📅  Настройка автообновлений...\n"
+stage "📅  Автообновления"
 UPDATE_SCRIPT="/usr/local/sbin/daily-security-update.sh"
 cat > "$UPDATE_SCRIPT" << 'EOF'
 #!/bin/bash
@@ -384,33 +443,44 @@ PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EOF
 chmod 0644 "/etc/cron.d/daily-security-update"
 systemctl is-active --quiet cron || systemctl start cron
-printf "✅  Автообновления настроены (03:00 daily).\n"
+printf "   ✅  Автообновления настроены (03:00 daily)\n"
 
 # === Блок 7: Fastfetch ===
-printf "\n🖥️  Установка Fastfetch...\n"
+stage "🖥️  Fastfetch"
 FASTFETCH_INSTALLED=false
+
+install_fastfetch_ppa() {
+    add-apt-repository -y ppa:zhangsongcui3371/fastfetch \
+        && apt-get update -qq \
+        && apt-get install -y fastfetch
+}
+
+install_fastfetch_deb() {
+    local arch url tmp
+    arch=$(dpkg --print-architecture)
+    url=$(curl -fsSL "https://api.github.com/repos/fastfetch-cli/fastfetch/releases/latest" \
+        | grep "browser_download_url" | grep "linux-${arch}.deb" | head -1 | cut -d '"' -f 4) || true
+    [ -n "$url" ] || return 1
+    tmp=$(mktemp)
+    curl -fsSL "$url" -o "$tmp"
+    dpkg -i "$tmp" || apt-get install -f -y
+    rm -f "$tmp"
+}
+
 if command -v fastfetch &>/dev/null; then
     FASTFETCH_INSTALLED=true
+    printf "   ✅  Fastfetch уже установлен\n"
 else
     if command -v add-apt-repository &>/dev/null; then
-        add-apt-repository -y ppa:zhangsongcui3371/fastfetch >/dev/null 2>&1 && \
-        apt-get update -qq && apt-get install -y fastfetch && FASTFETCH_INSTALLED=true || true
+        run_quiet -s "Установка Fastfetch (PPA)" install_fastfetch_ppa && FASTFETCH_INSTALLED=true || true
     fi
     if ! $FASTFETCH_INSTALLED; then
-        ARCH=$(dpkg --print-architecture)
-        FF_URL=$(curl -fsSL "https://api.github.com/repos/fastfetch-cli/fastfetch/releases/latest" | grep "browser_download_url" | grep "linux-${ARCH}.deb" | head -1 | cut -d '"' -f 4)
-        if [ -n "$FF_URL" ]; then
-            TMP_DEB=$(mktemp)
-            curl -fsSL "$FF_URL" -o "$TMP_DEB"
-            dpkg -i "$TMP_DEB" || apt-get install -f -y
-            rm -f "$TMP_DEB"
-            FASTFETCH_INSTALLED=true
-        fi
+        run_quiet -s "Установка Fastfetch (.deb с GitHub)" install_fastfetch_deb && FASTFETCH_INSTALLED=true || true
     fi
 fi
 
 if $FASTFETCH_INSTALLED; then
-    printf "• Настройка логотипа и конфига...\n"
+    printf "   • Настройка логотипа и конфига...\n"
     mkdir -p /root/.config/fastfetch
 
     cat > /root/.config/fastfetch/logo.txt << 'ASCII_LOGO'
@@ -493,15 +563,17 @@ if [ -n "$SSH_CONNECTION" ] && command -v fastfetch >/dev/null 2>&1; then
 fi
 PROFEOF
     chmod 0644 /etc/profile.d/fastfetch-ssh.sh
-    printf "✅  Fastfetch настроен.\n"
+    printf "   ✅  Fastfetch настроен\n"
 fi
 
 # === Блок 8: Финал ===
-printf "\n✅  Готово!\n"
-printf "   • Порт SSH: %s\n" "${ALL_PORTS[*]:-${SSH_PORT:-skipped}}"
-printf "   ⚠️  Проверьте вход по ключу на новом порту ДО перезагрузки!\n"
-printf "   • Fail2ban: Active\n"
-printf "   • Fastfetch: %s\n" "$($FASTFETCH_INSTALLED && echo 'Installed' || echo 'Skipped')"
+stage "🏁  Завершение"
+printf "   ✅  Готово!\n\n"
+printf "   • Порт SSH:   %s\n" "${ALL_PORTS[*]:-${SSH_PORT:-skipped}}"
+printf "   • Fail2ban:   Active\n"
+printf "   • Fastfetch:  %s\n" "$($FASTFETCH_INSTALLED && echo 'Installed' || echo 'Skipped')"
+printf "   • Лог:        %s\n" "$LOG_FILE"
+printf "\n   ⚠️  Проверьте вход по ключу на новом порту ДО перезагрузки!\n"
 
 mkdir -p "$MARKER_DIR"
 echo "version=$SCRIPT_VERSION" > "$MARKER_FILE"
