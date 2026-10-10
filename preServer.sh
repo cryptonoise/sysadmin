@@ -71,7 +71,10 @@ verify_and_restart_sshd() {
     }
 
     local eff_port eff_pwauth eff_rootlogin
-    eff_port=$(awk '/^port /{print $2; exit}' <<< "$eff")
+    local eff_ports
+    eff_ports=$(awk '/^port /{print $2}' <<< "$eff")
+    eff_port=$(tr '\n' ',' <<< "$eff_ports")
+    eff_port="${eff_port%,}"
     eff_pwauth=$(awk '/^passwordauthentication /{print $2; exit}' <<< "$eff")
     eff_rootlogin=$(awk '/^permitrootlogin /{print $2; exit}' <<< "$eff")
 
@@ -79,7 +82,7 @@ verify_and_restart_sshd() {
     [ "$norm_want_rootlogin" = "prohibit-password" ] && norm_want_rootlogin="without-password"
     [ "$norm_eff_rootlogin" = "prohibit-password" ] && norm_eff_rootlogin="without-password"
 
-    if [ "$eff_port" != "$want_port" ] || [ "$eff_pwauth" != "$want_pwauth" ] || [ "$norm_eff_rootlogin" != "$norm_want_rootlogin" ]; then
+    if ! grep -qx "$want_port" <<< "$eff_ports" || [ "$eff_pwauth" != "$want_pwauth" ] || [ "$norm_eff_rootlogin" != "$norm_want_rootlogin" ]; then
         printf "❌  Эффективный конфиг sshd НЕ совпадает с ожидаемым (port=%s pwauth=%s rootlogin=%s).\n" "$eff_port" "$eff_pwauth" "$eff_rootlogin"
         printf "    Проверьте /etc/ssh/sshd_config.d/*.conf вручную. Перезапуск sshd ОТМЕНЁН.\n"
         return 1
@@ -298,12 +301,25 @@ if [ "$SKIP_SSH_SETUP" = false ]; then
     printf "\n✅  Ключ принят.\n"
 
     if [[ -f "$SSH_CONFIG" ]]; then
+        # Запоминаем текущие порты sshd ДО правок (на VPS с NAT-пробросом провайдера
+        # внешний порт ведёт на внутренний 22 — его нельзя терять)
+        mapfile -t OLD_PORTS < <(sshd -T 2>/dev/null | awk '/^port /{print $2}')
+        [ "${#OLD_PORTS[@]}" -eq 0 ] && OLD_PORTS=(22)
+        ALL_PORTS=("$SSH_PORT")
+        for p in "${OLD_PORTS[@]}"; do
+            [ "$p" != "$SSH_PORT" ] && ALL_PORTS+=("$p")
+        done
+        printf "ℹ️  sshd будет слушать порты: %s\n" "${ALL_PORTS[*]}"
+
         cp "$SSH_CONFIG" "${SSH_CONFIG}.bak.$(date +%s)"
         ls -1t ${SSH_CONFIG}.bak.* 2>/dev/null | tail -n +6 | xargs -r rm -f
         neutralize_sshd_dropins
 
-        sed -i "s/^#\?Port.*/Port $SSH_PORT/" "$SSH_CONFIG"
-        grep -q "^Port" "$SSH_CONFIG" || echo "Port $SSH_PORT" >> "$SSH_CONFIG"
+        # Port-строки — в начало файла (чтобы не попасть внутрь блока Match)
+        sed -i -E '/^[[:space:]]*#?[[:space:]]*Port[[:space:]]/d' "$SSH_CONFIG"
+        _tmp=$(mktemp)
+        for p in "${ALL_PORTS[@]}"; do echo "Port $p"; done | cat - "$SSH_CONFIG" > "$_tmp"
+        cat "$_tmp" > "$SSH_CONFIG"; rm -f "$_tmp"
         
         sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin prohibit-password/' "$SSH_CONFIG"
         sed -i 's/^#\?PubkeyAuthentication.*/PubkeyAuthentication yes/' "$SSH_CONFIG"
@@ -315,13 +331,15 @@ if [ "$SKIP_SSH_SETUP" = false ]; then
         chmod 600 /root/.ssh/authorized_keys
 
         if [ -f /etc/fail2ban/jail.local ]; then
-            sed -i "s/^port = .*/port = $SSH_PORT/" /etc/fail2ban/jail.local
+            sed -i "s/^port = .*/port = $(IFS=,; echo "${ALL_PORTS[*]}")/" /etc/fail2ban/jail.local
             systemctl restart fail2ban >/dev/null 2>&1 || true
         fi
 
         if command -v ufw &>/dev/null; then
-            ufw allow "${SSH_PORT}/tcp" comment 'SSH (preServer)' >/dev/null 2>&1 || true
-            printf "• Порт %s открыт в ufw\n" "$SSH_PORT"
+            for p in "${ALL_PORTS[@]}"; do
+                ufw allow "${p}/tcp" comment 'SSH (preServer)' >/dev/null 2>&1 || true
+            done
+            printf "• Порты %s открыты в ufw\n" "${ALL_PORTS[*]}"
         fi
 
         if ! verify_and_restart_sshd "$SSH_PORT" no prohibit-password; then
@@ -469,7 +487,8 @@ fi
 
 # === Блок 8: Финал ===
 printf "\n✅  Готово!\n"
-printf "   • Порт SSH: %s\n" "${SSH_PORT:-skipped}"
+printf "   • Порт SSH: %s\n" "${ALL_PORTS[*]:-${SSH_PORT:-skipped}}"
+printf "   ⚠️  Проверьте вход по ключу на новом порту ДО перезагрузки!\n"
 printf "   • Fail2ban: Active\n"
 printf "   • Fastfetch: %s\n" "$($FASTFETCH_INSTALLED && echo 'Installed' || echo 'Skipped')"
 
