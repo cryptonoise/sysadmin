@@ -260,12 +260,12 @@ mkdir -p /run/sshd
 chmod 0755 /run/sshd
 
 SSH_CONFIG="/etc/ssh/sshd_config"
-DEFAULT_PORT=1119
+DEFAULT_PORT=22
 SSH_PORT=""
 SKIP_SSH_SETUP=false
 
 if command -v ss &>/dev/null; then
-    if ss -tuln | grep -q ":${DEFAULT_PORT} "; then
+    if ss -tulnp | grep ":${DEFAULT_PORT} " | grep -vq sshd; then
         SKIP_SSH_SETUP=true
         SSH_PORT="skipped"
         printf "⚠️  Порт %s занят — настройка SSH пропущена.\n" "$DEFAULT_PORT"
@@ -274,10 +274,10 @@ fi
 
 if [ "$SKIP_SSH_SETUP" = false ]; then
     while true; do
-        safe_read "Введите порт SSH (по умолчанию $DEFAULT_PORT): " INPUT_PORT
+        safe_read "Введите внутренний порт SSH (по умолчанию $DEFAULT_PORT; за NAT оставьте 22): " INPUT_PORT
         SSH_PORT=${INPUT_PORT:-$DEFAULT_PORT}
         if [[ "$SSH_PORT" =~ ^[0-9]+$ ]] && [ "$SSH_PORT" -ge 1 ] && [ "$SSH_PORT" -le 65535 ]; then
-             if command -v ss &>/dev/null && ss -tuln | grep -q ":${SSH_PORT} "; then
+             if command -v ss &>/dev/null && ss -tulnp | grep ":${SSH_PORT} " | grep -vq sshd; then
                 printf "\n⚠️  Порт %s занят.\n" "$SSH_PORT"
                 safe_read "Продолжить? (y/N): " confirm
                 [[ "$confirm" =~ ^[Yy]$ ]] && break || continue
