@@ -5,7 +5,7 @@
 ## Установка
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/preServer.sh | sudo bash
+curl -fsSL -H "Accept: application/vnd.github.raw" "https://api.github.com/repos/cryptonoise/sysadmin/contents/preServer.sh?ref=main" | sudo bash
 ```
 
 ## Что делает
