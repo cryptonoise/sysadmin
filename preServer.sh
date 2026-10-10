@@ -15,7 +15,7 @@ safe_read() {
 
 # === Блок 1: Приветствие и инициализация ===
 SCRIPT_NAME="Linux Server Pre-Config"
-SCRIPT_VERSION="2.1"
+SCRIPT_VERSION="2.2"
 SCRIPT_DESC="Предварительная настройка Linux сервера"
 
 # Метка запуска
@@ -301,15 +301,9 @@ if [ "$SKIP_SSH_SETUP" = false ]; then
     printf "\n✅  Ключ принят.\n"
 
     if [[ -f "$SSH_CONFIG" ]]; then
-        # Запоминаем текущие порты sshd ДО правок (на VPS с NAT-пробросом провайдера
-        # внешний порт ведёт на внутренний 22 — его нельзя терять)
-        mapfile -t OLD_PORTS < <(sshd -T 2>/dev/null | awk '/^port /{print $2}')
-        [ "${#OLD_PORTS[@]}" -eq 0 ] && OLD_PORTS=(22)
+        # sshd слушает ТОЛЬКО выбранный порт (старые порты, включая 22, не сохраняем)
         ALL_PORTS=("$SSH_PORT")
-        for p in "${OLD_PORTS[@]}"; do
-            [ "$p" != "$SSH_PORT" ] && ALL_PORTS+=("$p")
-        done
-        printf "ℹ️  sshd будет слушать порты: %s\n" "${ALL_PORTS[*]}"
+        printf "ℹ️  sshd будет слушать порт: %s\n" "${ALL_PORTS[*]}"
 
         cp "$SSH_CONFIG" "${SSH_CONFIG}.bak.$(date +%s)"
         ls -1t ${SSH_CONFIG}.bak.* 2>/dev/null | tail -n +6 | xargs -r rm -f
