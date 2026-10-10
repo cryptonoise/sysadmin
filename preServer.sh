@@ -13,9 +13,23 @@ safe_read() {
     IFS= read -r "$varname" <&3
 }
 
+# Вопрос "да/нет": Enter или y/Y/д/Д = да, n/N/н/Н = нет (повторяет вопрос при другом вводе)
+# Возврат: 0 — да, 1 — нет
+ask_yn() {
+    local prompt="$1" ans
+    while true; do
+        safe_read "$prompt [Enter/y — да, n — нет]: " ans
+        case "${ans,,}" in
+            ""|y|yes|д|да) return 0 ;;
+            n|no|н|нет)    return 1 ;;
+            *) printf "❌  Введите Enter или y (да), либо n (нет).\n" > /dev/tty ;;
+        esac
+    done
+}
+
 # === Блок 1: Приветствие и инициализация ===
 SCRIPT_NAME="Linux Server Pre-Config"
-SCRIPT_VERSION="2.2"
+SCRIPT_VERSION="2.3"
 SCRIPT_DESC="Предварительная настройка Linux сервера"
 
 # Метка запуска
@@ -92,6 +106,10 @@ verify_and_restart_sshd() {
     systemctl list-unit-files | grep -q "sshd.service" && svc="sshd"
 
     disable_ssh_socket_activation
+
+    # Остановка ssh.socket/ssh.service удаляет /run/sshd — создаём заново перед sshd -t
+    mkdir -p /run/sshd
+    chmod 0755 /run/sshd
 
     if ! sshd -t 2>&1; then
         printf "❌  sshd -t: синтаксическая ошибка, перезапуск отменён.\n"
@@ -179,8 +197,8 @@ rollback_preserver() {
 if [ -f "$MARKER_FILE" ]; then
     printf "\n⚠️  Обнаружена метка предыдущего запуска этого скрипта:\n"
     sed 's/^/     /' "$MARKER_FILE" > /dev/tty
-    safe_read $'\nВыполнить откат настроек? (y/N): ' rerun_choice
-    if [[ "$rerun_choice" =~ ^[Yy]$ ]]; then
+    printf "\n" > /dev/tty
+    if ask_yn "Выполнить откат настроек?"; then
         rollback_preserver
         exit 0
     else
@@ -279,8 +297,7 @@ if [ "$SKIP_SSH_SETUP" = false ]; then
         if [[ "$SSH_PORT" =~ ^[0-9]+$ ]] && [ "$SSH_PORT" -ge 1 ] && [ "$SSH_PORT" -le 65535 ]; then
              if command -v ss &>/dev/null && ss -tulnp | grep ":${SSH_PORT} " | grep -vq sshd; then
                 printf "\n⚠️  Порт %s занят.\n" "$SSH_PORT"
-                safe_read "Продолжить? (y/N): " confirm
-                [[ "$confirm" =~ ^[Yy]$ ]] && break || continue
+                ask_yn "Продолжить?" && break || continue
             fi
             break
         else
@@ -492,10 +509,8 @@ echo "ran_at=$(date '+%F %T')" >> "$MARKER_FILE"
 echo "ssh_port=${SSH_PORT:-skipped}" >> "$MARKER_FILE"
 
 if [ -t 1 ] && [ -e /dev/tty ]; then
-    printf "\n🔄  Перезагрузить сейчас? [y/N]: " > /dev/tty
-    REBOOT_ANSWER=""
-    IFS= read -r REBOOT_ANSWER < /dev/tty || true
-    if [[ "$REBOOT_ANSWER" =~ ^[Yy]$ ]]; then
+    printf "\n" > /dev/tty
+    if ask_yn "🔄  Перезагрузить сейчас?"; then
         reboot
     fi
 fi
