@@ -8,6 +8,10 @@
 #   • создаёт SFTP-пользователя keygen (только SFTP, без shell) и папку /var/www/keygen
 #   • nginx :80  →  reload  →  сертификат Let's Encrypt (webroot)  →  nginx HTTPS
 #   • ничего не ломает: чужие конфиги nginx, SSH-порт и 3x-ui не трогаются
+#   • после r2b (RELAY + BACKEND): запускать на BACKEND. Режим relay определяется
+#     автоматически (есть /etc/rathole/client.toml): A-запись домена должна вести
+#     на RELAY, ufw на BACKEND не меняется (80/443 открыты только через туннель),
+#     HTTPS-порт всегда 443. Принудительно: KM_RELAY=1 / KM_RELAY=0.
 #
 # Запуск:
 #   curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/server4keymaster.sh | sudo bash
@@ -24,7 +28,7 @@ set -Eeuo pipefail
 # ─────────────────────────── Константы ───────────────────────────
 readonly SCRIPT_TITLE="KeyMaster Server Setup"
 readonly SCRIPT_SUBTITLE="Автонастройка Ubuntu-сервера под KeyMaster.py"
-readonly SCRIPT_VERSION="6.1"
+readonly SCRIPT_VERSION="6.2"
 
 readonly KM_USER="keygen"
 readonly KM_HOME="/var/www/keygen"            # remote_folder в KeyMaster.py
@@ -454,6 +458,8 @@ HOME_DIR=${KM_HOME}
 HTTPS_PORT=${HTTPS_PORT}
 NGINX_CONF=${CONF_AVAIL}
 NGINX_LINK=${CONF_LINK}
+RELAY_MODE=${RELAY_MODE}
+RELAY_IP=${RELAY_IP}
 EOF
     chmod 644 "$MARKER"
 }
@@ -534,6 +540,18 @@ if (( ! HAVE_TTY )) && [[ -z ${KM_DOMAIN:-} ]]; then
 fi
 
 PUBLIC_IP=$(get_public_ip)
+
+# ── режим relay: BACKEND за обратным туннелем rathole (после r2b) ──
+RELAY_MODE=0; RELAY_IP=""; BASE_DOMAIN=""
+if [[ -f /etc/rathole/server.toml && ! -f /etc/rathole/client.toml ]]; then
+    die "Это RELAY (rathole-server): здесь нет nginx, а 80/443 заняты туннелем. Запустите скрипт на BACKEND."
+fi
+if [[ ${KM_RELAY:-auto} == 1 ]] || [[ ${KM_RELAY:-auto} == auto && -f /etc/rathole/client.toml ]]; then
+    RELAY_MODE=1
+    RELAY_IP=$(sed -n 's/^remote_addr *= *"\([0-9.]*\):.*/\1/p' /etc/rathole/client.toml 2>/dev/null | head -n1 || true)
+    BASE_DOMAIN=$(sed -n 's/^hostname *= *"\(.*\)"/\1/p' /etc/rathole/client.toml 2>/dev/null | head -n1 || true)
+fi
+
 SSH_PORTS=$(ssh_ports)
 SSH_PORT=${SSH_PORTS%%,*}
 if [[ ",${SSH_PORTS}," == *",${DEFAULT_SSH_PORT},"* ]]; then SSH_PORT=$DEFAULT_SSH_PORT; fi
@@ -542,6 +560,11 @@ SSH_PORT=${SSH_PORT:-22}
 kv "ОС" "$OS_NAME"
 kv "Публичный IP" "${PUBLIC_IP:-не определён}"
 kv "SSH-порт(ы)" "${SSH_PORTS:-не определён}"
+if (( RELAY_MODE )); then
+    kv "Режим" "relay: BACKEND за rathole, RELAY ${RELAY_IP:-не определён}, домен панели ${BASE_DOMAIN:-?}"
+else
+    kv "Режим" "прямой (сервер доступен напрямую)"
+fi
 if [[ $SSH_PORT != "$DEFAULT_SSH_PORT" ]]; then
     warn "В KeyMaster.py сейчас server_port = ${DEFAULT_SSH_PORT}, а sshd слушает ${SSH_PORT} — поправьте значение в скрипте"
 fi
@@ -570,7 +593,8 @@ if command -v ufw >/dev/null 2>&1; then
     UFW_STATUS=$(ufw status 2>/dev/null || true)
     if grep -q '^Status: active' <<<"$UFW_STATUS"; then UFW_ACTIVE=1; fi
 fi
-if (( UFW_ACTIVE )); then kv "Firewall (ufw)" "активен — откроем нужные порты"; else kv "Firewall (ufw)" "не активен — правила не меняем"; fi
+if (( UFW_ACTIVE && RELAY_MODE )); then kv "Firewall (ufw)" "активен — режим relay: 80/443 не трогаем"
+elif (( UFW_ACTIVE )); then kv "Firewall (ufw)" "активен — откроем нужные порты"; else kv "Firewall (ufw)" "не активен — правила не меняем"; fi
 
 if (( UFW_ACTIVE )) && [[ -n ${SSH_PORTS} ]]; then
     for p in ${SSH_PORTS//,/ }; do
@@ -603,6 +627,7 @@ step "Параметры установки"
 
 DOMAIN=""
 DOMAIN_DEFAULT=$(mk_get DOMAIN)
+if [[ -z $DOMAIN_DEFAULT && -n $BASE_DOMAIN ]]; then DOMAIN_DEFAULT="keygen.${BASE_DOMAIN}"; fi
 while true; do
     if [[ -n ${KM_DOMAIN:-} ]]; then d=$KM_DOMAIN; else prompt d "Домен для KeyMaster (например keygen.example.com)" "$DOMAIN_DEFAULT"; fi
     d=$(tr 'A-Z' 'a-z' <<<"$d" | sed -E 's#^[a-z]+://##; s#[/:].*$##; s#[[:space:]]##g')
@@ -610,6 +635,9 @@ while true; do
     if [[ -n ${KM_DOMAIN:-} ]] || (( ! HAVE_TTY )); then die "Некорректный домен: ${d}"; fi
     err "Некорректный домен, попробуйте ещё раз"
 done
+if [[ -n $BASE_DOMAIN && $DOMAIN == "$BASE_DOMAIN" ]]; then
+    die "Домен ${DOMAIN} уже занят панелью 3x-ui и honeypot (r2b). Возьмите поддомен, например keygen.${BASE_DOMAIN}"
+fi
 ok "Домен: ${DOMAIN}"
 
 # SSH-ключ для SFTP-пользователя: всегда ключи root, без вопросов
@@ -649,16 +677,29 @@ if ! confirm "Начать установку?" Y; then info "Отменено."
 # ───────────────────── [3] DNS и порты ────────────────────────────
 step "DNS и порты"
 
+if (( RELAY_MODE )) && [[ -n $RELAY_IP ]]; then
+    DNS_TARGET=$RELAY_IP; DNS_WHO="IP RELAY"
+    info "Режим relay: трафик домена приходит через RELAY ${RELAY_IP}, A-запись должна указывать на него"
+else
+    DNS_TARGET=${PUBLIC_IP:-}; DNS_WHO="IP сервера"
+fi
 RESOLVED_IP=$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk '{print $1; exit}' || true)
 if [[ -z $RESOLVED_IP ]]; then
-    warn "Домен ${DOMAIN} пока не резолвится — сертификат не выпустится без A-записи на ${PUBLIC_IP:-IP сервера}"
-    confirm "Всё равно продолжить?" N || die "Создайте A-запись ${DOMAIN} → ${PUBLIC_IP:-IP сервера} и запустите скрипт снова"
-elif [[ -n $PUBLIC_IP && $RESOLVED_IP != "$PUBLIC_IP" ]]; then
-    warn "${DOMAIN} → ${RESOLVED_IP}, а IP сервера ${PUBLIC_IP}"
+    warn "Домен ${DOMAIN} пока не резолвится — сертификат не выпустится без A-записи на ${DNS_TARGET:-$DNS_WHO}"
+    confirm "Всё равно продолжить?" N || die "Создайте A-запись ${DOMAIN} → ${DNS_TARGET:-$DNS_WHO} и запустите скрипт снова"
+elif [[ -n $DNS_TARGET && $RESOLVED_IP != "$DNS_TARGET" ]]; then
+    warn "${DOMAIN} → ${RESOLVED_IP}, а ${DNS_WHO} ${DNS_TARGET}"
     info "Если включён Cloudflare-прокси (оранжевое облако) — выключите его на время выпуска сертификата"
     confirm "Всё равно продолжить?" N || die "Поправьте A-запись и запустите скрипт снова"
 else
     ok "DNS: ${DOMAIN} → ${RESOLVED_IP}"
+fi
+if (( RELAY_MODE )) && command -v dig >/dev/null 2>&1; then
+    AAAA=$(dig +short +time=3 +tries=1 AAAA "$DOMAIN" @8.8.8.8 2>/dev/null | grep ':' | head -n1 || true)
+    if [[ -n $AAAA ]]; then
+        warn "У ${DOMAIN} есть AAAA-запись (${AAAA}): через RELAY IPv6 не пробрасывается, а Let's Encrypt проверяет по IPv6 первым"
+        confirm "Всё равно продолжить?" N || die "Удалите AAAA-запись ${DOMAIN} и запустите скрипт снова"
+    fi
 fi
 
 OWNER_80=$(port_owner 80)
@@ -669,8 +710,12 @@ if [[ -n $OWNER_80 ]]; then ok "Порт 80: nginx"; else ok "Порт 80: св�
 
 HTTPS_PORT=$(mk_get HTTPS_PORT)
 HTTPS_PORT=${HTTPS_PORT:-443}
+if (( RELAY_MODE )); then HTTPS_PORT=443; fi   # через RELAY проброшены только 443/80/8443
 OWNER_443=$(port_owner "$HTTPS_PORT")
 if [[ -n $OWNER_443 && $OWNER_443 != nginx ]]; then
+    if (( RELAY_MODE )); then
+        die "Порт 443 на BACKEND занят «${OWNER_443}». Через RELAY проброшен только 443 — другой порт снаружи недоступен. Освободите 443 (его должен держать nginx вместе с панелью)."
+    fi
     warn "Порт ${HTTPS_PORT} занят процессом «${OWNER_443}» (например, Xray/Reality из 3x-ui)"
     while true; do
         prompt HTTPS_PORT "Другой HTTPS-порт для KeyMaster" "4443"
@@ -776,7 +821,9 @@ enable_conf
 ok "Конфиг записан: ${CONF_AVAIL}"
 nginx_apply
 
-if (( UFW_ACTIVE )); then
+if (( RELAY_MODE )); then
+    info "Режим relay: 80/443 на BACKEND закрыты в ufw намеренно (трафик идёт через туннель на 127.0.0.1) — ufw не меняю"
+elif (( UFW_ACTIVE )); then
     run "ufw: порт 80/tcp" ufw allow 80/tcp || warn "Не удалось добавить правило ufw для 80"
     run "ufw: порт ${HTTPS_PORT}/tcp" ufw allow "${HTTPS_PORT}/tcp" || warn "Не удалось добавить правило ufw для ${HTTPS_PORT}"
 else
@@ -878,6 +925,15 @@ if [[ $FC == *internal-sftp* ]]; then ok "sshd: ${KM_USER} ограничен SF
 CERT_END=$(openssl x509 -enddate -noout -in "$LIVE" 2>/dev/null | cut -d= -f2 || true)
 ok "Сертификат действует до: ${CERT_END:-?}"
 
+if (( RELAY_MODE )) && [[ -n $RELAY_IP ]]; then
+    VIA=$(curl -s -o /dev/null --max-time 15 -w '%{http_code}' --resolve "${DOMAIN}:443:${RELAY_IP}" "https://${DOMAIN}/" 2>/dev/null || true)
+    if [[ -n $VIA && $VIA != 000 ]]; then
+        ok "HTTPS через RELAY ${RELAY_IP}: сертификат валиден, ответ HTTP ${VIA} (404 при пустой папке — норма)"
+    else
+        warn "Через RELAY ${RELAY_IP} https://${DOMAIN}/ не отвечает: проверьте туннель (systemctl status rathole), A-запись и порт 443 на RELAY"
+    fi
+fi
+
 MEDIA_URL="https://${DOMAIN}"
 if [[ $HTTPS_PORT != 443 ]]; then MEDIA_URL+=":${HTTPS_PORT}"; fi
 
@@ -887,10 +943,17 @@ box_row "$GRN" "✔ Сервер готов к работе с KeyMaster.py" "" 
 box_close "$GRN"
 
 section "Пропишите в KeyMaster.py"
-cfg server_ip        "\"${PUBLIC_IP:-IP_СЕРВЕРА}\""
+SRV_NOTE=""
+if (( RELAY_MODE )); then SRV_NOTE="IP BACKEND: SFTP идёт напрямую по SSH"; fi
+cfg server_ip        "\"${PUBLIC_IP:-IP_СЕРВЕРА}\"" "$SRV_NOTE"
 cfg server_port      "$SSH_PORT"
 cfg username         "\"${KM_USER}\""
 cfg remote_folder    "\"${KM_HOME}\""
 cfg media_domain     "\"${MEDIA_URL}\""
 cfg private_key_path "\"uploadkey.pem\"" "приватный RSA-ключ к ключу root"
 echo
+if (( RELAY_MODE )); then
+    info "SFTP (server_ip:server_port) идёт напрямую на BACKEND, а media_domain открывается через RELAY ${RELAY_IP}"
+    info "A-запись ${DOMAIN} должна вести на RELAY ${RELAY_IP}"
+    echo
+fi
