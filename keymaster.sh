@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# server4keymaster.sh — автонастройка Ubuntu-сервера под KeyMaster.py
+# keymaster.sh — автонастройка Ubuntu-сервера под KeyMaster.py
 #
 # Что делает:
 #   • проверяет сервер (учитывает, что 3x-ui / nginx / certbot уже могут стоять)
@@ -14,7 +14,7 @@
 #     HTTPS-порт всегда 443. Принудительно: KM_RELAY=1 / KM_RELAY=0.
 #
 # Запуск:
-#   curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/server4keymaster.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/cryptonoise/sysadmin/refs/heads/main/keymaster.sh | sudo bash
 #
 # Необязательные переменные (для запуска без вопросов):
 #   curl -fsSL ... | sudo KM_DOMAIN=keygen.example.com bash
